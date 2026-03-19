@@ -82,6 +82,24 @@ export interface ModuleTreeNode {
 
 export type ProgressCallback = (phase: string, percent: number, detail?: string) => void;
 
+export function selectFilesForInitialGrouping(
+  filesWithExports: FileWithExports[],
+  allFiles: string[],
+): FileWithExports[] {
+  const exportedFiles = filesWithExports.filter(file => !shouldIgnorePath(file.filePath));
+  if (exportedFiles.length > 0) {
+    return exportedFiles;
+  }
+
+  const sourceFiles = allFiles.filter(filePath => !shouldIgnorePath(filePath));
+  if (sourceFiles.length === 0) {
+    return [];
+  }
+
+  const exportMap = new Map(filesWithExports.map(file => [file.filePath, file]));
+  return sourceFiles.map(filePath => exportMap.get(filePath) || { filePath, symbols: [] });
+}
+
 // ─── Constants ────────────────────────────────────────────────────────
 
 const DEFAULT_MAX_TOKENS_PER_MODULE = 30_000;
@@ -212,20 +230,11 @@ export class WikiGenerator {
     this.onProgress('gather', 5, 'Querying graph for file structure...');
     const filesWithExports = await getFilesWithExports();
     const allFiles = await getAllFiles();
-
-    // Filter to source files only
-    const sourceFiles = allFiles.filter(f => !shouldIgnorePath(f));
-    if (sourceFiles.length === 0) {
+    const enrichedFiles = selectFilesForInitialGrouping(filesWithExports, allFiles);
+    if (enrichedFiles.length === 0) {
       throw new Error('No source files found in the knowledge graph. Nothing to document.');
     }
-
-    // Build enriched file list (merge exports into all source files)
-    const exportMap = new Map(filesWithExports.map(f => [f.filePath, f]));
-    const enrichedFiles: FileWithExports[] = sourceFiles.map(fp => {
-      return exportMap.get(fp) || { filePath: fp, symbols: [] };
-    });
-
-    this.onProgress('gather', 10, `Found ${sourceFiles.length} source files`);
+    this.onProgress('gather', 10, `Found ${enrichedFiles.length} source files`);
 
     // Phase 1: Build module tree
     const moduleTree = await this.buildModuleTree(enrichedFiles);

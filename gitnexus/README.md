@@ -149,6 +149,17 @@ gitnexus clean                   # Delete index for current repo
 gitnexus clean --all --force     # Delete all indexes
 gitnexus wiki [path]             # Generate LLM-powered docs from knowledge graph
 gitnexus wiki --model <model>    # Wiki with custom LLM model (default: gpt-4o-mini)
+gitnexus sipher-patched [path]   # S2 bootstrap: analyze, prepare snapshot, and run wiki
+```
+
+### S2 Bootstrap
+
+`gitnexus sipher-patched` is an S2-specific bootstrap command for the Unreal S2 repository. It validates the repo shape, re-runs `analyze` when needed, generates `.gitnexus/wiki/first_module_tree.json`, and then runs `wiki` with an Ather gateway-friendly default base URL.
+
+If your gateway requires extra auth headers, provide them through environment variables instead of `~/.gitnexus/config.json`:
+
+```bash
+AI_GATEWAY_CREDENTIAL=... AI_GATEWAY_GROUP=... gitnexus sipher-patched
 ```
 
 ## Multi-Repo Support

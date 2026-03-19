@@ -42,4 +42,13 @@ describe('CLI help surface', () => {
     expect(result.stdout).toContain('--include-tests');
     expect(result.stdout).toContain('--repo <name>');
   });
+
+  it('sipher-patched help exposes S2 bootstrap flags', () => {
+    const result = runHelp('sipher-patched');
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('--embeddings');
+    expect(result.stdout).toContain('--concurrency <n>');
+    expect(result.stdout).toContain('--gist');
+  });
 });

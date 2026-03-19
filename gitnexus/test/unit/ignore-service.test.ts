@@ -54,6 +54,8 @@ describe('shouldIgnorePath', () => {
       '.pdf', '.doc', '.docx',
       // Media
       '.mp4', '.mp3', '.wav',
+      // Unreal assets
+      '.uasset', '.umap', '.ubulk', '.uexp', '.utoc', '.ucas', '.fbx',
       // Fonts
       '.woff', '.woff2', '.ttf',
       // Databases

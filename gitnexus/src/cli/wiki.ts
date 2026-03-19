@@ -21,6 +21,7 @@ export interface WikiCommandOptions {
   apiKey?: string;
   concurrency?: string;
   gist?: boolean;
+  persistConfig?: boolean;
 }
 
 /**
@@ -113,7 +114,10 @@ export const wikiCommand = async (
 
   // ── Resolve LLM config (with interactive fallback) ─────────────────
   // Save any CLI overrides immediately
-  if (options?.apiKey || options?.model || options?.baseUrl) {
+  const hasExplicitRuntimeOverrides = !!(options?.apiKey || options?.model || options?.baseUrl);
+  const shouldPersistOverrides = options?.persistConfig !== false;
+
+  if (hasExplicitRuntimeOverrides && shouldPersistOverrides) {
     const existing = await loadCLIConfig();
     const updates: Record<string, string> = {};
     if (options.apiKey) updates.apiKey = options.apiKey;
@@ -125,17 +129,17 @@ export const wikiCommand = async (
 
   const savedConfig = await loadCLIConfig();
   const hasSavedConfig = !!(savedConfig.apiKey && savedConfig.baseUrl);
-  const hasCLIOverrides = !!(options?.apiKey || options?.model || options?.baseUrl);
 
   let llmConfig = await resolveLLMConfig({
     model: options?.model,
     baseUrl: options?.baseUrl,
     apiKey: options?.apiKey,
   });
+  const hasResolvedLLMConfig = !!(llmConfig.apiKey && llmConfig.baseUrl);
 
   // Run interactive setup if no saved config and no CLI flags provided
   // (even if env vars exist — let user explicitly choose their provider)
-  if (!hasSavedConfig && !hasCLIOverrides) {
+  if (!hasSavedConfig && !hasResolvedLLMConfig) {
     if (!process.stdin.isTTY) {
       if (!llmConfig.apiKey) {
         console.log('  Error: No LLM API key found.');

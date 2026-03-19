@@ -145,6 +145,7 @@ describe('CLI end-to-end', () => {
       // The program name and at least one known subcommand should appear.
       expect(result.stdout).toMatch(/gitnexus/i);
       expect(result.stdout).toMatch(/analyze|status|serve/i);
+      expect(result.stdout).toMatch(/sipher-patched/i);
     });
 
     it('fails with unknown command', () => {

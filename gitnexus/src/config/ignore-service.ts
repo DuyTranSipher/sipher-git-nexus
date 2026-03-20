@@ -124,10 +124,6 @@ const IGNORED_EXTENSIONS = new Set([
     // Media
     '.mp4', '.mp3', '.wav', '.mov', '.avi', '.mkv', '.flv', '.wmv',
     '.ogg', '.webm', '.flac', '.aac', '.m4a',
-
-    // Unreal assets / packaged content
-    '.uasset', '.umap', '.ubulk', '.uexp', '.uptnl',
-    '.locres', '.pak', '.utoc', '.ucas', '.bnk', '.fbx',
     
     // Fonts
     '.woff', '.woff2', '.ttf', '.eot', '.otf',

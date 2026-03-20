@@ -72,18 +72,6 @@ program
   .action(createLazyAction(() => import('./wiki.js'), 'wikiCommand'));
 
 program
-  .command('sipher-patched [path]')
-  .description('Bootstrap GitNexus analyze + wiki for the S2 repository')
-  .option('-f, --force', 'Force re-analysis, snapshot regeneration, and wiki rebuild')
-  .option('--embeddings', 'Enable embedding generation during bootstrap analyze')
-  .option('--model <model>', 'LLM model name for wiki generation')
-  .option('--base-url <url>', 'LLM API base URL for wiki generation')
-  .option('--api-key <key>', 'LLM API key for wiki generation')
-  .option('--concurrency <n>', 'Parallel LLM calls for wiki generation (default: 3)', '3')
-  .option('--gist', 'Publish wiki as a public GitHub Gist after generation')
-  .action(createLazyAction(() => import('./sipher-patched.js'), 'sipherPatchedCommand'));
-
-program
   .command('augment <pattern>')
   .description('Augment a search pattern with knowledge graph context (used by hooks)')
   .action(createLazyAction(() => import('./augment.js'), 'augmentCommand'));

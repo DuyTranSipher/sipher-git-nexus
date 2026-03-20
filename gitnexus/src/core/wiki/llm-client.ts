@@ -13,6 +13,9 @@ export interface LLMConfig {
   model: string;
   maxTokens: number;
   temperature: number;
+  gatewayApiKey?: string;
+  gatewayCredential?: string;
+  gatewayGroup?: string;
 }
 
 export interface LLMResponse {
@@ -34,6 +37,7 @@ export async function resolveLLMConfig(overrides?: Partial<LLMConfig>): Promise<
   const apiKey = overrides?.apiKey
     || process.env.GITNEXUS_API_KEY
     || process.env.OPENAI_API_KEY
+    || process.env.AI_GATEWAY_API_KEY
     || savedConfig.apiKey
     || '';
 
@@ -49,6 +53,9 @@ export async function resolveLLMConfig(overrides?: Partial<LLMConfig>): Promise<
       || 'minimax/minimax-m2.5',
     maxTokens: overrides?.maxTokens ?? 16_384,
     temperature: overrides?.temperature ?? 0,
+    gatewayApiKey: overrides?.gatewayApiKey || process.env.AI_GATEWAY_API_KEY || '',
+    gatewayCredential: overrides?.gatewayCredential || process.env.AI_GATEWAY_CREDENTIAL || '',
+    gatewayGroup: overrides?.gatewayGroup || process.env.AI_GATEWAY_GROUP || '',
   };
 }
 
@@ -61,6 +68,13 @@ export function estimateTokens(text: string): number {
 
 export interface CallLLMOptions {
   onChunk?: (charsReceived: number) => void;
+}
+
+function isGatewayStreamStartFailure(status: number, errorText: string): boolean {
+  if (status < 500) return false;
+  const normalized = errorText.toLowerCase();
+  return normalized.includes('empty_stream')
+    || normalized.includes('upstream stream closed before first payload');
 }
 
 /**
@@ -83,30 +97,42 @@ export async function callLLM(
   const url = `${config.baseUrl.replace(/\/+$/, '')}/chat/completions`;
   const useStream = !!options?.onChunk;
 
-  const body: Record<string, unknown> = {
+  const baseBody: Record<string, unknown> = {
     model: config.model,
     messages,
     max_tokens: config.maxTokens,
     temperature: config.temperature,
   };
-  if (useStream) body.stream = true;
 
   const MAX_RETRIES = 3;
   let lastError: Error | null = null;
+  let preferStream = useStream;
+  let streamFallbackUsed = false;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${config.apiKey}`,
+  };
+  if (config.gatewayApiKey) headers.AI_GATEWAY_API_KEY = config.gatewayApiKey;
+  if (config.gatewayCredential) headers.AI_GATEWAY_CREDENTIAL = config.gatewayCredential;
+  if (config.gatewayGroup) headers.AI_GATEWAY_GROUP = config.gatewayGroup;
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
       const response = await fetch(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${config.apiKey}`,
-        },
-        body: JSON.stringify(body),
+        headers,
+        body: JSON.stringify(preferStream ? { ...baseBody, stream: true } : baseBody),
       });
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => 'unknown error');
+
+        if (preferStream && !streamFallbackUsed && isGatewayStreamStartFailure(response.status, errorText)) {
+          streamFallbackUsed = true;
+          preferStream = false;
+          attempt--;
+          continue;
+        }
 
         // Rate limit — wait with exponential backoff and retry
         if (response.status === 429 && attempt < MAX_RETRIES - 1) {
@@ -126,7 +152,7 @@ export async function callLLM(
       }
 
       // Streaming path
-      if (useStream && response.body) {
+      if (preferStream && response.body) {
         return await readSSEStream(response.body, options!.onChunk!);
       }
 

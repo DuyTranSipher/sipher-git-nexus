@@ -72,6 +72,11 @@ program
   .action(createLazyAction(() => import('./wiki.js'), 'wikiCommand'));
 
 program
+  .command('sipher-patched [path]')
+  .description('Validate S2 repo shape and Sipher gateway env for wiki generation')
+  .action(createLazyAction(() => import('./sipher-patched.js'), 'sipherPatchedCommand'));
+
+program
   .command('augment <pattern>')
   .description('Augment a search pattern with knowledge graph context (used by hooks)')
   .action(createLazyAction(() => import('./augment.js'), 'augmentCommand'));

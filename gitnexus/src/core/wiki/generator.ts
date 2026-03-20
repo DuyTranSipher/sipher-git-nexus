@@ -86,6 +86,59 @@ export type ProgressCallback = (phase: string, percent: number, detail?: string)
 
 const DEFAULT_MAX_TOKENS_PER_MODULE = 30_000;
 const WIKI_DIR = 'wiki';
+export const MAX_WIKI_PROMPT_TOKENS = 120_000;
+const LARGE_REPO_GROUPING_FILE_THRESHOLD = 1_500;
+const MAX_FILES_PER_DETERMINISTIC_GROUP = 250;
+const MAX_GROUPING_BATCH_TOKENS = 40_000;
+const MAX_LEAF_SOURCE_TOKENS = 70_000;
+const MAX_EDGE_SECTION_TOKENS = 10_000;
+const MAX_PROCESS_SECTION_TOKENS = 10_000;
+const MAX_PARENT_CHILD_DOC_TOKENS = 80_000;
+const MAX_OVERVIEW_SUMMARY_TOKENS = 80_000;
+const MAX_PROJECT_INFO_TOKENS = 10_000;
+const WIKI_CODE_SUFFIXES = [
+  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
+  '.py', '.java', '.kt', '.kts', '.cs',
+  '.go', '.rs', '.php', '.rb', '.swift',
+  '.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.hxx',
+  '.m', '.mm',
+  '.usf', '.ush', '.glsl', '.hlsl',
+] as const;
+
+export function isWikiPromptExcludedPath(filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, '/').toLowerCase();
+  return normalized.endsWith('.uasset') || normalized.endsWith('.umap');
+}
+
+export function isWikiCodeFilePath(filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, '/').toLowerCase();
+  return WIKI_CODE_SUFFIXES.some(suffix => normalized.endsWith(suffix));
+}
+
+export function filterWikiPromptPaths(filePaths: string[]): string[] {
+  return filePaths.filter(filePath => !isWikiPromptExcludedPath(filePath) && isWikiCodeFilePath(filePath));
+}
+
+export function estimateGroupingPromptTokens(files: FileWithExports[]): number {
+  const fileList = formatFileListForGrouping(files);
+  const dirTree = formatDirectoryTree(files.map(f => f.filePath));
+  const prompt = fillTemplate(GROUPING_USER_PROMPT, {
+    FILE_LIST: fileList,
+    DIRECTORY_TREE: dirTree,
+  });
+  return estimateTokens(prompt);
+}
+
+export function shouldUseDeterministicGrouping(fileCount: number, promptTokens: number): boolean {
+  return fileCount > LARGE_REPO_GROUPING_FILE_THRESHOLD || promptTokens > MAX_WIKI_PROMPT_TOKENS;
+}
+
+function truncateTextToTokenBudget(text: string, maxTokens: number, notice: string): string {
+  if (maxTokens <= 0) return notice.trim();
+  if (estimateTokens(text) <= maxTokens) return text;
+  const maxChars = Math.max(0, (maxTokens * 4) - notice.length);
+  return text.slice(0, maxChars) + notice;
+}
 
 // ─── Generator Class ──────────────────────────────────────────────────
 
@@ -214,7 +267,7 @@ export class WikiGenerator {
     const allFiles = await getAllFiles();
 
     // Filter to source files only
-    const sourceFiles = allFiles.filter(f => !shouldIgnorePath(f));
+    const sourceFiles = allFiles.filter(f => !shouldIgnorePath(f) && !isWikiPromptExcludedPath(f) && isWikiCodeFilePath(f));
     if (sourceFiles.length === 0) {
       throw new Error('No source files found in the knowledge graph. Nothing to document.');
     }
@@ -320,36 +373,44 @@ export class WikiGenerator {
       // No snapshot, generate new
     }
 
-    this.onProgress('grouping', 15, 'Grouping files into modules (LLM)...');
+    const groupingPromptTokens = estimateGroupingPromptTokens(files);
+    let tree: ModuleTreeNode[];
 
-    const fileList = formatFileListForGrouping(files);
-    const dirTree = formatDirectoryTree(files.map(f => f.filePath));
+    if (shouldUseDeterministicGrouping(files.length, groupingPromptTokens)) {
+      this.onProgress('grouping', 15, `Large repo detected (${files.length} files, ${groupingPromptTokens} tok) — using deterministic grouping`);
+      tree = this.buildDeterministicModuleTree(files);
+    } else {
+      this.onProgress('grouping', 15, 'Grouping files into modules (LLM)...');
 
-    const prompt = fillTemplate(GROUPING_USER_PROMPT, {
-      FILE_LIST: fileList,
-      DIRECTORY_TREE: dirTree,
-    });
+      const fileList = formatFileListForGrouping(files);
+      const dirTree = formatDirectoryTree(files.map(f => f.filePath));
 
-    const response = await callLLM(
-      prompt, this.llmConfig, GROUPING_SYSTEM_PROMPT,
-      this.streamOpts('Grouping files', 15),
-    );
-    const grouping = this.parseGroupingResponse(response.content, files);
+      const prompt = fillTemplate(GROUPING_USER_PROMPT, {
+        FILE_LIST: fileList,
+        DIRECTORY_TREE: dirTree,
+      });
 
-    // Convert to tree nodes
-    const tree: ModuleTreeNode[] = [];
-    for (const [moduleName, modulePaths] of Object.entries(grouping)) {
-      const slug = this.slugify(moduleName);
-      const node: ModuleTreeNode = { name: moduleName, slug, files: modulePaths };
+      this.assertPromptWithinBudget(prompt, 'Grouping');
 
-      // Token budget check — split if too large
-      const totalTokens = await this.estimateModuleTokens(modulePaths);
-      if (totalTokens > this.maxTokensPerModule && modulePaths.length > 3) {
-        node.children = this.splitBySubdirectory(moduleName, modulePaths);
-        node.files = []; // Parent doesn't own files directly when split
+      const response = await callLLM(
+        prompt, this.llmConfig, GROUPING_SYSTEM_PROMPT,
+        this.streamOpts('Grouping files', 15),
+      );
+      const grouping = this.parseGroupingResponse(response.content, files);
+
+      tree = [];
+      for (const [moduleName, modulePaths] of Object.entries(grouping)) {
+        const slug = this.slugify(moduleName);
+        const node: ModuleTreeNode = { name: moduleName, slug, files: modulePaths };
+
+        const totalTokens = await this.estimateModuleTokens(modulePaths);
+        if (totalTokens > this.maxTokensPerModule && modulePaths.length > 3) {
+          node.children = this.splitBySubdirectory(moduleName, modulePaths);
+          node.files = [];
+        }
+
+        tree.push(node);
       }
-
-      tree.push(node);
     }
 
     // Save immutable snapshot for resumability
@@ -446,11 +507,20 @@ export class WikiGenerator {
       group.push(fp);
     }
 
-    return Array.from(subGroups.entries()).map(([subDir, subFiles]) => ({
-      name: `${moduleName} — ${path.basename(subDir)}`,
-      slug: this.slugify(`${moduleName}-${path.basename(subDir)}`),
-      files: subFiles,
-    }));
+    const children: ModuleTreeNode[] = [];
+    for (const [subDir, subFiles] of Array.from(subGroups.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
+      const chunked = this.chunkFiles(subFiles.sort());
+      chunked.forEach((chunk, index) => {
+        const suffix = chunked.length > 1 ? ` ${index + 1}` : '';
+        const childName = `${moduleName} — ${path.basename(subDir)}${suffix}`;
+        children.push({
+          name: childName,
+          slug: this.slugify(`${moduleName}-${path.basename(subDir)}-${index + 1}`),
+          files: chunk,
+        });
+      });
+    }
+    return children;
   }
 
   // ─── Phase 2: Generate Module Pages ─────────────────────────────────
@@ -464,12 +534,11 @@ export class WikiGenerator {
     // Read source files from disk
     const sourceCode = await this.readSourceFiles(filePaths);
 
-    // Token budget check — if too large, summarize in batches
-    const totalTokens = estimateTokens(sourceCode);
-    let finalSourceCode = sourceCode;
-    if (totalTokens > this.maxTokensPerModule) {
-      finalSourceCode = this.truncateSource(sourceCode, this.maxTokensPerModule);
-    }
+    const finalSourceCode = truncateTextToTokenBudget(
+      sourceCode,
+      Math.min(this.maxTokensPerModule, MAX_LEAF_SOURCE_TOKENS),
+      '\n\n... (source truncated for context window limits)',
+    );
 
     // Get graph data
     const [intraCalls, interCalls, processes] = await Promise.all([
@@ -478,14 +547,37 @@ export class WikiGenerator {
       getProcessesForFiles(filePaths, 5),
     ]);
 
+    const intraCallsText = truncateTextToTokenBudget(
+      formatCallEdges(intraCalls),
+      MAX_EDGE_SECTION_TOKENS,
+      '\n... (internal calls truncated)',
+    );
+    const outgoingCallsText = truncateTextToTokenBudget(
+      formatCallEdges(interCalls.outgoing),
+      MAX_EDGE_SECTION_TOKENS,
+      '\n... (outgoing calls truncated)',
+    );
+    const incomingCallsText = truncateTextToTokenBudget(
+      formatCallEdges(interCalls.incoming),
+      MAX_EDGE_SECTION_TOKENS,
+      '\n... (incoming calls truncated)',
+    );
+    const processesText = truncateTextToTokenBudget(
+      formatProcesses(processes),
+      MAX_PROCESS_SECTION_TOKENS,
+      '\n... (processes truncated)',
+    );
+
     const prompt = fillTemplate(MODULE_USER_PROMPT, {
       MODULE_NAME: node.name,
       SOURCE_CODE: finalSourceCode,
-      INTRA_CALLS: formatCallEdges(intraCalls),
-      OUTGOING_CALLS: formatCallEdges(interCalls.outgoing),
-      INCOMING_CALLS: formatCallEdges(interCalls.incoming),
-      PROCESSES: formatProcesses(processes),
+      INTRA_CALLS: intraCallsText,
+      OUTGOING_CALLS: outgoingCallsText,
+      INCOMING_CALLS: incomingCallsText,
+      PROCESSES: processesText,
     });
+
+    this.assertPromptWithinBudget(prompt, `Leaf module ${node.name}`);
 
     const response = await callLLM(
       prompt, this.llmConfig, MODULE_SYSTEM_PROMPT,
@@ -523,12 +615,30 @@ export class WikiGenerator {
     const crossCalls = await getIntraModuleCallEdges(allChildFiles);
     const processes = await getProcessesForFiles(allChildFiles, 3);
 
+    const childDocsText = truncateTextToTokenBudget(
+      childDocs.join('\n\n'),
+      MAX_PARENT_CHILD_DOC_TOKENS,
+      '\n\n... (child documentation truncated)',
+    );
+    const crossCallsText = truncateTextToTokenBudget(
+      formatCallEdges(crossCalls),
+      MAX_EDGE_SECTION_TOKENS,
+      '\n... (cross-module calls truncated)',
+    );
+    const crossProcessesText = truncateTextToTokenBudget(
+      formatProcesses(processes),
+      MAX_PROCESS_SECTION_TOKENS,
+      '\n... (shared processes truncated)',
+    );
+
     const prompt = fillTemplate(PARENT_USER_PROMPT, {
       MODULE_NAME: node.name,
-      CHILDREN_DOCS: childDocs.join('\n\n'),
-      CROSS_MODULE_CALLS: formatCallEdges(crossCalls),
-      CROSS_PROCESSES: formatProcesses(processes),
+      CHILDREN_DOCS: childDocsText,
+      CROSS_MODULE_CALLS: crossCallsText,
+      CROSS_PROCESSES: crossProcessesText,
     });
+
+    this.assertPromptWithinBudget(prompt, `Parent module ${node.name}`);
 
     const response = await callLLM(
       prompt, this.llmConfig, PARENT_SYSTEM_PROMPT,
@@ -569,13 +679,35 @@ export class WikiGenerator {
     const edgesText = moduleEdges.length > 0
       ? moduleEdges.map(e => `${e.from} → ${e.to} (${e.count} calls)`).join('\n')
       : 'No inter-module call edges detected';
+    const trimmedModuleSummaries = truncateTextToTokenBudget(
+      moduleSummaries.join('\n\n'),
+      MAX_OVERVIEW_SUMMARY_TOKENS,
+      '\n\n... (module summaries truncated)',
+    );
+    const trimmedEdgesText = truncateTextToTokenBudget(
+      edgesText,
+      MAX_EDGE_SECTION_TOKENS,
+      '\n... (inter-module edges truncated)',
+    );
+    const trimmedProcessesText = truncateTextToTokenBudget(
+      formatProcesses(topProcesses),
+      MAX_PROCESS_SECTION_TOKENS,
+      '\n... (top processes truncated)',
+    );
+    const trimmedProjectInfo = truncateTextToTokenBudget(
+      projectInfo,
+      MAX_PROJECT_INFO_TOKENS,
+      '\n... (project info truncated)',
+    );
 
     const prompt = fillTemplate(OVERVIEW_USER_PROMPT, {
-      PROJECT_INFO: projectInfo,
-      MODULE_SUMMARIES: moduleSummaries.join('\n\n'),
-      MODULE_EDGES: edgesText,
-      TOP_PROCESSES: formatProcesses(topProcesses),
+      PROJECT_INFO: trimmedProjectInfo,
+      MODULE_SUMMARIES: trimmedModuleSummaries,
+      MODULE_EDGES: trimmedEdgesText,
+      TOP_PROCESSES: trimmedProcessesText,
     });
+
+    this.assertPromptWithinBudget(prompt, 'Overview');
 
     const response = await callLLM(
       prompt, this.llmConfig, OVERVIEW_SYSTEM_PROMPT,
@@ -621,7 +753,7 @@ export class WikiGenerator {
           break;
         }
       }
-      if (!found && !shouldIgnorePath(fp)) {
+      if (!found && !shouldIgnorePath(fp) && !isWikiPromptExcludedPath(fp) && isWikiCodeFilePath(fp)) {
         newFiles.push(fp);
       }
     }
@@ -724,7 +856,7 @@ export class WikiGenerator {
 
   private async readSourceFiles(filePaths: string[]): Promise<string> {
     const parts: string[] = [];
-    for (const fp of filePaths) {
+    for (const fp of filterWikiPromptPaths(filePaths)) {
       const fullPath = path.join(this.repoPath, fp);
       try {
         const content = await fs.readFile(fullPath, 'utf-8');
@@ -745,7 +877,7 @@ export class WikiGenerator {
 
   private async estimateModuleTokens(filePaths: string[]): Promise<number> {
     let total = 0;
-    for (const fp of filePaths) {
+    for (const fp of filterWikiPromptPaths(filePaths)) {
       try {
         const content = await fs.readFile(path.join(this.repoPath, fp), 'utf-8');
         total += estimateTokens(content);
@@ -791,6 +923,97 @@ export class WikiGenerator {
     }
 
     return lines.join('\n');
+  }
+
+  private assertPromptWithinBudget(prompt: string, label: string): void {
+    const promptTokens = estimateTokens(prompt);
+    if (promptTokens > MAX_WIKI_PROMPT_TOKENS) {
+      throw new Error(`${label} prompt exceeds safe budget (${promptTokens} tokens)`);
+    }
+  }
+
+  private buildDeterministicModuleTree(files: FileWithExports[]): ModuleTreeNode[] {
+    const topGroups = new Map<string, string[]>();
+    for (const file of files) {
+      const normalized = file.filePath.replace(/\\/g, '/');
+      const topLevel = normalized.split('/')[0] || 'Root';
+      const group = topGroups.get(topLevel) || [];
+      group.push(file.filePath);
+      topGroups.set(topLevel, group);
+    }
+
+    const tree: ModuleTreeNode[] = [];
+    for (const [topLevel, topFiles] of Array.from(topGroups.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
+      const sortedTopFiles = topFiles.sort();
+      const subGroups = new Map<string, string[]>();
+      for (const filePath of sortedTopFiles) {
+        const normalized = filePath.replace(/\\/g, '/');
+        const parts = normalized.split('/');
+        const subKey = parts.length > 2 ? parts.slice(0, 2).join('/') : topLevel;
+        const group = subGroups.get(subKey) || [];
+        group.push(filePath);
+        subGroups.set(subKey, group);
+      }
+
+      const children: ModuleTreeNode[] = [];
+      for (const [subKey, subFiles] of Array.from(subGroups.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
+        const chunked = this.chunkFiles(subFiles.sort());
+        chunked.forEach((chunk, index) => {
+          const baseName = subKey === topLevel ? topLevel : path.basename(subKey);
+          const suffix = chunked.length > 1 ? ` ${index + 1}` : '';
+          children.push({
+            name: `${topLevel} — ${baseName}${suffix}`,
+            slug: this.slugify(`${topLevel}-${baseName}-${index + 1}`),
+            files: chunk,
+          });
+        });
+      }
+
+      if (children.length <= 1 && sortedTopFiles.length <= MAX_FILES_PER_DETERMINISTIC_GROUP) {
+        tree.push({
+          name: topLevel,
+          slug: this.slugify(topLevel),
+          files: sortedTopFiles,
+        });
+        continue;
+      }
+
+      tree.push({
+        name: topLevel,
+        slug: this.slugify(topLevel),
+        files: [],
+        children,
+      });
+    }
+
+    return tree;
+  }
+
+  private chunkFiles(files: string[]): string[][] {
+    const chunks: string[][] = [];
+    let currentChunk: string[] = [];
+    let currentPromptTokens = 0;
+
+    for (const file of files) {
+      const filePromptTokens = estimateTokens(`- ${file}: no exports\n`);
+      const wouldExceedFileLimit = currentChunk.length >= MAX_FILES_PER_DETERMINISTIC_GROUP;
+      const wouldExceedPromptBudget = currentChunk.length > 0
+        && currentPromptTokens + filePromptTokens > MAX_GROUPING_BATCH_TOKENS;
+
+      if (wouldExceedFileLimit || wouldExceedPromptBudget) {
+        chunks.push(currentChunk);
+        currentChunk = [];
+        currentPromptTokens = 0;
+      }
+
+      currentChunk.push(file);
+      currentPromptTokens += filePromptTokens;
+    }
+
+    if (currentChunk.length > 0) {
+      chunks.push(currentChunk);
+    }
+    return chunks;
   }
 
   private extractModuleFiles(tree: ModuleTreeNode[]): Record<string, string[]> {

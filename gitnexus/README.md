@@ -149,6 +149,7 @@ gitnexus clean                   # Delete index for current repo
 gitnexus clean --all --force     # Delete all indexes
 gitnexus wiki [path]             # Generate LLM-powered docs from knowledge graph
 gitnexus wiki --model <model>    # Wiki with custom LLM model (default: gpt-4o-mini)
+gitnexus sipher-patched [path]   # Validate S2 repo shape and Sipher gateway env
 ```
 
 ## Multi-Repo Support

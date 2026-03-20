@@ -139,7 +139,7 @@ export const wikiCommand = async (
     if (!process.stdin.isTTY) {
       if (!llmConfig.apiKey) {
         console.log('  Error: No LLM API key found.');
-        console.log('  Set OPENAI_API_KEY or GITNEXUS_API_KEY environment variable,');
+        console.log('  Set OPENAI_API_KEY, GITNEXUS_API_KEY, or AI_GATEWAY_API_KEY environment variable,');
         console.log('  or pass --api-key <key>.\n');
         process.exitCode = 1;
         return;
@@ -180,7 +180,7 @@ export const wikiCommand = async (
       const model = modelInput || defaultModel;
 
       // API key — pre-fill hint if env var exists
-      const envKey = process.env.GITNEXUS_API_KEY || process.env.OPENAI_API_KEY || '';
+      const envKey = process.env.GITNEXUS_API_KEY || process.env.OPENAI_API_KEY || process.env.AI_GATEWAY_API_KEY || '';
       let key: string;
       if (envKey) {
         const masked = envKey.slice(0, 6) + '...' + envKey.slice(-4);

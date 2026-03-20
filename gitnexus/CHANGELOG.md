@@ -2,6 +2,22 @@
 
 All notable changes to GitNexus will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- `gitnexus sipher-patched [path]` S2 preflight command for validating Sipher gateway environment before wiki generation
+- Sipher gateway header support for wiki LLM requests via `AI_GATEWAY_API_KEY`, `AI_GATEWAY_CREDENTIAL`, and `AI_GATEWAY_GROUP`
+
+### Changed
+- Wiki generation now uses code-centric inputs for large repositories instead of grouping repo-wide docs and metadata into one giant prompt
+- Large repositories switch to deterministic module grouping when the initial grouping prompt would be too large
+- Wiki prompt sections now enforce bounded token budgets before calling the LLM
+
+### Fixed
+- Retry wiki LLM requests without streaming when the gateway returns `empty_stream: upstream stream closed before first payload`
+- Exclude `.uasset` and `.umap` files from wiki prompt construction and token estimation
+- Prevent S2 wiki generation from failing on the initial module-grouping call due to oversized prompt payloads
+
 ## [1.4.6] - 2026-03-18
 
 ### Added

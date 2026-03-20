@@ -42,4 +42,14 @@ describe('CLI help surface', () => {
     expect(result.stdout).toContain('--include-tests');
     expect(result.stdout).toContain('--repo <name>');
   });
+
+  it('sipher-patched help exposes the preflight command without bootstrap flags', () => {
+    const result = runHelp('sipher-patched');
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('Usage: gitnexus sipher-patched [options] [path]');
+    expect(result.stdout).not.toContain('--embeddings');
+    expect(result.stdout).not.toContain('--concurrency <n>');
+    expect(result.stdout).not.toContain('--gist');
+  });
 });

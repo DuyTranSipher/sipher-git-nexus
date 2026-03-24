@@ -2,7 +2,7 @@
  * Unit Tests: MCP Tool Definitions
  *
  * Tests: GITNEXUS_TOOLS from tools.ts
- * - All 7 tools are defined
+ * - All MCP tools are defined
  * - Each tool has valid name, description, inputSchema
  * - Required fields are correct
  * - Optional repo parameter is present on tools that need it
@@ -12,7 +12,7 @@ import { GITNEXUS_TOOLS, type ToolDefinition } from '../../src/mcp/tools.js';
 
 describe('GITNEXUS_TOOLS', () => {
   it('exports exactly 7 tools', () => {
-    expect(GITNEXUS_TOOLS).toHaveLength(7);
+    expect(GITNEXUS_TOOLS).toHaveLength(11);
   });
 
   it('contains all expected tool names', () => {
@@ -21,6 +21,10 @@ describe('GITNEXUS_TOOLS', () => {
       expect.arrayContaining([
         'list_repos', 'query', 'cypher', 'context',
         'detect_changes', 'rename', 'impact',
+        'sync_unreal_asset_manifest',
+        'find_native_blueprint_references',
+        'expand_blueprint_chain',
+        'find_blueprints_derived_from_native_class',
       ])
     );
   });
@@ -75,6 +79,23 @@ describe('GITNEXUS_TOOLS', () => {
     const listTool = GITNEXUS_TOOLS.find(t => t.name === 'list_repos')!;
     expect(Object.keys(listTool.inputSchema.properties)).toHaveLength(0);
     expect(listTool.inputSchema.required).toEqual([]);
+  });
+
+  it('find_native_blueprint_references requires no positional parameter when uid is used', () => {
+    const tool = GITNEXUS_TOOLS.find(t => t.name === 'find_native_blueprint_references')!;
+    expect(tool.inputSchema.required).toEqual([]);
+    expect(tool.inputSchema.properties.function).toBeDefined();
+    expect(tool.inputSchema.properties.symbol_uid).toBeDefined();
+  });
+
+  it('expand_blueprint_chain requires asset_path and chain_anchor_id', () => {
+    const tool = GITNEXUS_TOOLS.find(t => t.name === 'expand_blueprint_chain')!;
+    expect(tool.inputSchema.required).toEqual(['asset_path', 'chain_anchor_id']);
+  });
+
+  it('find_blueprints_derived_from_native_class requires class_name', () => {
+    const tool = GITNEXUS_TOOLS.find(t => t.name === 'find_blueprints_derived_from_native_class')!;
+    expect(tool.inputSchema.required).toEqual(['class_name']);
   });
 
   it('all tools except list_repos have optional repo parameter', () => {

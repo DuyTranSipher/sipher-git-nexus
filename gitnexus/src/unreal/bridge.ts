@@ -1,0 +1,159 @@
+import fs from 'fs/promises';
+import path from 'path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { randomUUID } from 'node:crypto';
+import { ensureUnrealStorage, saveUnrealAssetManifest } from './config.js';
+import type {
+  ExpandBlueprintChainResult,
+  FindNativeBlueprintReferencesResult,
+  NativeFunctionTarget,
+  SyncUnrealAssetManifestResult,
+  UnrealAnalyzerExpandChainResponse,
+  UnrealAnalyzerFindRefsResponse,
+  UnrealAnalyzerSyncResponse,
+  UnrealBlueprintCandidate,
+  UnrealConfig,
+  UnrealStoragePaths,
+} from './types.js';
+
+const execFileAsync = promisify(execFile);
+
+type AnalyzerOperation = 'SyncAssets' | 'FindNativeBlueprintReferences' | 'ExpandBlueprintChain';
+
+function buildBaseArgs(config: UnrealConfig, operation: AnalyzerOperation, outputPath: string): string[] {
+  return [
+    config.project_path,
+    `-run=${config.commandlet || 'GitNexusBlueprintAnalyzer'}`,
+    `-Operation=${operation}`,
+    `-OutputJson=${outputPath}`,
+    '-unattended',
+    '-nop4',
+    '-nosplash',
+    '-nullrhi',
+    ...(config.extra_args || []),
+  ];
+}
+
+function requestPaths(paths: UnrealStoragePaths): { requestPath: string; outputPath: string } {
+  const requestId = randomUUID();
+  return {
+    requestPath: path.join(paths.requests_dir, `${requestId}.json`),
+    outputPath: path.join(paths.outputs_dir, `${requestId}.json`),
+  };
+}
+
+async function runCommand(
+  config: UnrealConfig,
+  operation: AnalyzerOperation,
+  args: string[],
+): Promise<{ stdout: string; stderr: string }> {
+  return execFileAsync(config.editor_cmd, args, {
+    cwd: config.working_directory,
+    timeout: config.timeout_ms || 300000,
+    windowsHide: true,
+    maxBuffer: 10 * 1024 * 1024,
+  });
+}
+
+async function readOutputJson<T>(outputPath: string, stdout: string): Promise<T> {
+  try {
+    const raw = await fs.readFile(outputPath, 'utf-8');
+    return JSON.parse(raw) as T;
+  } catch {
+    return JSON.parse(stdout) as T;
+  }
+}
+
+export async function syncUnrealAssetManifest(
+  storagePath: string,
+  config: UnrealConfig,
+): Promise<SyncUnrealAssetManifestResult> {
+  const unrealPaths = await ensureUnrealStorage(storagePath);
+  const { outputPath } = requestPaths(unrealPaths);
+  const args = buildBaseArgs(config, 'SyncAssets', outputPath);
+
+  try {
+    const { stdout } = await runCommand(config, 'SyncAssets', args);
+    const response = await readOutputJson<UnrealAnalyzerSyncResponse>(outputPath, stdout);
+    const manifestPath = await saveUnrealAssetManifest(storagePath, response.manifest);
+    return {
+      status: 'success',
+      manifest_path: manifestPath,
+      asset_count: response.manifest.assets.length,
+      generated_at: response.manifest.generated_at,
+      warnings: response.warnings || [],
+    };
+  } catch (error) {
+    return {
+      status: 'error',
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export async function findNativeBlueprintReferences(
+  storagePath: string,
+  config: UnrealConfig,
+  target: NativeFunctionTarget,
+  candidateAssets: UnrealBlueprintCandidate[],
+  manifestPath?: string,
+): Promise<FindNativeBlueprintReferencesResult> {
+  const unrealPaths = await ensureUnrealStorage(storagePath);
+  const { requestPath, outputPath } = requestPaths(unrealPaths);
+  await fs.writeFile(requestPath, JSON.stringify({ candidate_assets: candidateAssets }, null, 2), 'utf-8');
+
+  const args = [
+    ...buildBaseArgs(config, 'FindNativeBlueprintReferences', outputPath),
+    `-TargetSymbolKey=${target.symbol_key}`,
+    `-TargetFunction=${target.symbol_name}`,
+    ...(target.class_name ? [`-TargetClass=${target.class_name}`] : []),
+    `-CandidatesJson=${requestPath}`,
+  ];
+
+  const { stdout } = await runCommand(config, 'FindNativeBlueprintReferences', args);
+  const response = await readOutputJson<UnrealAnalyzerFindRefsResponse>(outputPath, stdout);
+
+  return {
+    target_function: {
+      ...target,
+      ...(response.target_function || {}),
+    },
+    candidates_scanned: response.candidates_scanned ?? candidateAssets.length,
+    candidate_assets: candidateAssets,
+    confirmed_references: response.confirmed_references || [],
+    manifest_path: manifestPath,
+    warnings: response.warnings || [],
+  };
+}
+
+export async function expandBlueprintChain(
+  storagePath: string,
+  config: UnrealConfig,
+  assetPath: string,
+  chainAnchorId: string,
+  direction: 'upstream' | 'downstream',
+  maxDepth: number,
+): Promise<ExpandBlueprintChainResult> {
+  const unrealPaths = await ensureUnrealStorage(storagePath);
+  const { outputPath } = requestPaths(unrealPaths);
+  const args = [
+    ...buildBaseArgs(config, 'ExpandBlueprintChain', outputPath),
+    `-AssetPath=${assetPath}`,
+    `-ChainAnchorId=${chainAnchorId}`,
+    `-Direction=${direction}`,
+    `-MaxDepth=${maxDepth}`,
+  ];
+
+  const { stdout } = await runCommand(config, 'ExpandBlueprintChain', args);
+  const response = await readOutputJson<UnrealAnalyzerExpandChainResponse>(outputPath, stdout);
+
+  return {
+    asset_path: assetPath,
+    chain_anchor_id: chainAnchorId,
+    direction,
+    max_depth: maxDepth,
+    nodes: response.nodes || [],
+    warnings: response.warnings || [],
+  };
+}

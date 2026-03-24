@@ -33,6 +33,93 @@ vi.mock('../../src/mcp/core/embedder.js', () => ({
   getEmbeddingDims: vi.fn().mockReturnValue(384),
 }));
 
+vi.mock('../../src/unreal/config.js', () => ({
+  ensureUnrealStorage: vi.fn().mockResolvedValue(undefined),
+  getUnrealStoragePaths: vi.fn().mockReturnValue({
+    root_dir: '/tmp/.gitnexus/test-project/unreal',
+    config_path: '/tmp/.gitnexus/test-project/unreal/config.json',
+    manifest_path: '/tmp/.gitnexus/test-project/unreal/asset-manifest.json',
+    requests_dir: '/tmp/.gitnexus/test-project/unreal/requests',
+    outputs_dir: '/tmp/.gitnexus/test-project/unreal/outputs',
+  }),
+  loadUnrealConfig: vi.fn().mockResolvedValue({
+    editor_cmd: 'UnrealEditor-Cmd.exe',
+    project_path: '/tmp/Test.uproject',
+    commandlet: 'GitNexusBlueprintAnalyzer',
+  }),
+  loadUnrealAssetManifest: vi.fn().mockResolvedValue({
+    version: 1,
+    generated_at: '2026-03-24T00:00:00Z',
+    assets: [
+      {
+        asset_path: '/Game/Test/BP_Test.BP_Test',
+        generated_class: '/Game/Test/BP_Test.BP_Test_C',
+        parent_class: '/Script/Test.TestActor',
+        native_parents: ['TestActor'],
+        native_function_refs: ['TestActor::NativeAction'],
+        dependencies: ['/Script/Test.TestActor'],
+      },
+    ],
+  }),
+}));
+
+vi.mock('../../src/unreal/bridge.js', () => ({
+  syncUnrealAssetManifest: vi.fn().mockResolvedValue({
+    status: 'success',
+    manifest_path: '/tmp/.gitnexus/test-project/unreal/asset-manifest.json',
+    asset_count: 1,
+    generated_at: '2026-03-24T00:00:00Z',
+    warnings: [],
+  }),
+  findNativeBlueprintReferences: vi.fn().mockResolvedValue({
+    target_function: {
+      symbol_id: 'method:NativeAction',
+      symbol_name: 'NativeAction',
+      symbol_type: 'Method',
+      symbol_key: 'TestActor::NativeAction',
+      qualified_name: 'TestActor::NativeAction',
+      class_name: 'TestActor',
+    },
+    candidates_scanned: 1,
+    candidate_assets: [
+      {
+        asset_path: '/Game/Test/BP_Test.BP_Test',
+        generated_class: '/Game/Test/BP_Test.BP_Test_C',
+        parent_class: '/Script/Test.TestActor',
+        reason: 'native_function_ref',
+      },
+    ],
+    confirmed_references: [
+      {
+        asset_path: '/Game/Test/BP_Test.BP_Test',
+        graph_name: 'EventGraph',
+        node_kind: 'UK2Node_CallFunction',
+        node_title: 'Native Action',
+        blueprint_owner_function: 'ExecuteUbergraph_BP_Test',
+        chain_anchor_id: 'guid-1',
+        source: 'editor_confirmed',
+      },
+    ],
+    warnings: [],
+  }),
+  expandBlueprintChain: vi.fn().mockResolvedValue({
+    asset_path: '/Game/Test/BP_Test.BP_Test',
+    chain_anchor_id: 'guid-1',
+    direction: 'downstream',
+    max_depth: 5,
+    nodes: [
+      {
+        node_id: 'guid-1',
+        graph_name: 'EventGraph',
+        node_kind: 'UK2Node_CallFunction',
+        node_title: 'Native Action',
+        depth: 0,
+      },
+    ],
+    warnings: [],
+  }),
+}));
+
 import { LocalBackend } from '../../src/mcp/local/local-backend.js';
 import { listRegisteredRepos, cleanupOldKuzuFiles } from '../../src/storage/repo-manager.js';
 import { initLbug, executeQuery, executeParameterized, isLbugReady, closeLbug } from '../../src/mcp/core/lbug-adapter.js';
@@ -247,6 +334,48 @@ describe('LocalBackend.callTool', () => {
   it('rename returns error when both symbol_name and symbol_uid are missing', async () => {
     const result = await backend.callTool('rename', { new_name: 'newName' });
     expect(result.error).toContain('Either symbol_name or symbol_uid');
+  });
+
+  it('dispatches sync_unreal_asset_manifest tool', async () => {
+    const result = await backend.callTool('sync_unreal_asset_manifest', {});
+    expect(result.status).toBe('success');
+    expect(result.asset_count).toBe(1);
+  });
+
+  it('dispatches find_native_blueprint_references tool', async () => {
+    (executeParameterized as any).mockResolvedValue([
+      {
+        symbolId: 'method:NativeAction',
+        symbolName: 'NativeAction',
+        symbolType: 'Method',
+        filePath: 'Source/Test/TestActor.cpp',
+        startLine: 42,
+        ownerClass: 'TestActor',
+      },
+    ]);
+
+    const result = await backend.callTool('find_native_blueprint_references', {
+      function: 'TestActor::NativeAction',
+    });
+    expect(result.confirmed_references).toHaveLength(1);
+    expect(result.target_function.symbol_key).toBe('TestActor::NativeAction');
+  });
+
+  it('dispatches expand_blueprint_chain tool', async () => {
+    const result = await backend.callTool('expand_blueprint_chain', {
+      asset_path: '/Game/Test/BP_Test.BP_Test',
+      chain_anchor_id: 'guid-1',
+    });
+    expect(result.nodes).toHaveLength(1);
+    expect(result.direction).toBe('downstream');
+  });
+
+  it('dispatches find_blueprints_derived_from_native_class tool', async () => {
+    const result = await backend.callTool('find_blueprints_derived_from_native_class', {
+      class_name: 'TestActor',
+    });
+    expect(result.blueprints).toHaveLength(1);
+    expect(result.blueprints[0].asset_path).toContain('BP_Test');
   });
 
   // Legacy tool aliases

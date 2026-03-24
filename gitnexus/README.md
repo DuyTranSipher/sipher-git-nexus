@@ -111,6 +111,10 @@ Your AI agent gets these tools automatically:
 | `detect_changes` | Git-diff impact — maps changed lines to affected processes | Optional |
 | `rename` | Multi-file coordinated rename with graph + text search | Optional |
 | `cypher` | Raw Cypher graph queries | Optional |
+| `sync_unreal_asset_manifest` | Refresh Unreal Blueprint manifest via the configured Unreal commandlet | Optional |
+| `find_native_blueprint_references` | Confirm direct Blueprint references to a native C++ function | Optional |
+| `expand_blueprint_chain` | Expand upstream/downstream Blueprint graph flow from a confirmed anchor | Optional |
+| `find_blueprints_derived_from_native_class` | List Blueprint assets derived from a native class via the manifest | Optional |
 
 > With one indexed repo, the `repo` param is optional. With multiple, specify which: `query({query: "auth", repo: "my-app"})`.
 
@@ -150,7 +154,32 @@ gitnexus clean --all --force     # Delete all indexes
 gitnexus wiki [path]             # Generate LLM-powered docs from knowledge graph
 gitnexus wiki --model <model>    # Wiki with custom LLM model (default: gpt-4o-mini)
 gitnexus sipher-patched [path]   # Validate S2 repo shape and Sipher gateway env
+gitnexus unreal-sync             # Refresh Unreal Blueprint asset manifest for the current indexed repo
+gitnexus unreal-find-refs <fn>   # Confirm Blueprint references to a native C++ function
+gitnexus unreal-expand-chain ... # Expand a Blueprint graph chain from a confirmed anchor
+gitnexus unreal-derived-blueprints <class> # List Blueprints derived from a native class
 ```
+
+## Unreal Blueprint References
+
+GitNexus can bridge into an Unreal Editor commandlet to answer "which Blueprints call this native C++ function?" with graph-confirmed results.
+
+1. Install the plugin from `../gitnexus-unreal/` into your Unreal project's `Plugins/` folder.
+2. Create `.gitnexus/unreal/config.json` in the indexed repo:
+
+```json
+{
+  "editor_cmd": "C:/Program Files/Epic Games/UE_5.5/Engine/Binaries/Win64/UnrealEditor-Cmd.exe",
+  "project_path": "D:/Projects/sipher_test_project/sipher_test_project.uproject",
+  "commandlet": "GitNexusBlueprintAnalyzer",
+  "timeout_ms": 300000
+}
+```
+
+3. Refresh the manifest with `gitnexus unreal-sync`.
+4. Query references with `gitnexus unreal-find-refs "AMyActor::MyBlueprintCallableFunction"`.
+
+The manifest lives at `.gitnexus/unreal/asset-manifest.json`. GitNexus uses it only as a candidate shortlist; confirmed graph references still come from the Unreal commandlet.
 
 ## Multi-Repo Support
 

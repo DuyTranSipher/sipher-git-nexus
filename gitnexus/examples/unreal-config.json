@@ -1,0 +1,6 @@
+{
+  "editor_cmd": "C:/Program Files/Epic Games/UE_5.5/Engine/Binaries/Win64/UnrealEditor-Cmd.exe",
+  "project_path": "D:/Projects/MyUnrealGame/MyUnrealGame.uproject",
+  "commandlet": "GitNexusBlueprintAnalyzer",
+  "timeout_ms": 300000
+}

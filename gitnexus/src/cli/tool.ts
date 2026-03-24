@@ -9,6 +9,7 @@
  *   gitnexus context --name "validateUser"
  *   gitnexus impact --target "AuthService" --direction upstream
  *   gitnexus cypher "MATCH (n:Function) RETURN n.name LIMIT 10"
+ *   gitnexus unreal-find-refs "ALyraWeaponSpawner::GetPickupInstigator"
  * 
  * Note: Output goes to stdout via fs.writeSync(fd 1), bypassing LadybugDB's
  * native module which captures the Node.js process.stdout stream during init.
@@ -147,6 +148,83 @@ export async function cypherCommand(query: string, options?: {
   const backend = await getBackend();
   const result = await backend.callTool('cypher', {
     query,
+    repo: options?.repo,
+  });
+  output(result);
+}
+
+export async function syncUnrealAssetManifestCommand(options?: {
+  repo?: string;
+}): Promise<void> {
+  const backend = await getBackend();
+  const result = await backend.callTool('sync_unreal_asset_manifest', {
+    repo: options?.repo,
+  });
+  output(result);
+}
+
+export async function findNativeBlueprintReferencesCommand(functionName: string, options?: {
+  repo?: string;
+  className?: string;
+  file?: string;
+  uid?: string;
+  refreshManifest?: boolean;
+  maxCandidates?: string;
+}): Promise<void> {
+  if (!functionName?.trim() && !options?.uid) {
+    console.error('Usage: gitnexus unreal-find-refs <Class::Function> [--uid <uid>]');
+    process.exit(1);
+  }
+
+  const backend = await getBackend();
+  const result = await backend.callTool('find_native_blueprint_references', {
+    function: functionName || undefined,
+    symbol_uid: options?.uid,
+    class_name: options?.className,
+    file_path: options?.file,
+    refresh_manifest: options?.refreshManifest ?? false,
+    max_candidates: options?.maxCandidates ? parseInt(options.maxCandidates, 10) : undefined,
+    repo: options?.repo,
+  });
+  output(result);
+}
+
+export async function expandBlueprintChainCommand(assetPath: string, chainAnchorId: string, options?: {
+  repo?: string;
+  direction?: 'upstream' | 'downstream';
+  depth?: string;
+}): Promise<void> {
+  if (!assetPath?.trim() || !chainAnchorId?.trim()) {
+    console.error('Usage: gitnexus unreal-expand-chain <asset_path> <chain_anchor_id>');
+    process.exit(1);
+  }
+
+  const backend = await getBackend();
+  const result = await backend.callTool('expand_blueprint_chain', {
+    asset_path: assetPath,
+    chain_anchor_id: chainAnchorId,
+    direction: options?.direction || 'downstream',
+    max_depth: options?.depth ? parseInt(options.depth, 10) : undefined,
+    repo: options?.repo,
+  });
+  output(result);
+}
+
+export async function findBlueprintsDerivedFromNativeClassCommand(className: string, options?: {
+  repo?: string;
+  refreshManifest?: boolean;
+  maxResults?: string;
+}): Promise<void> {
+  if (!className?.trim()) {
+    console.error('Usage: gitnexus unreal-derived-blueprints <class_name>');
+    process.exit(1);
+  }
+
+  const backend = await getBackend();
+  const result = await backend.callTool('find_blueprints_derived_from_native_class', {
+    class_name: className,
+    refresh_manifest: options?.refreshManifest ?? false,
+    max_results: options?.maxResults ? parseInt(options.maxResults, 10) : undefined,
     repo: options?.repo,
   });
   output(result);

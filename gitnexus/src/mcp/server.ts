@@ -46,6 +46,18 @@ function getNextStepHint(toolName: string, args: Record<string, any> | undefined
     case 'list_repos':
       return `\n\n---\n**Next:** READ gitnexus://repo/{name}/context for any repo above to get its overview and check staleness.`;
 
+    case 'sync_unreal_asset_manifest':
+      return `\n\n---\n**Next:** Use find_native_blueprint_references({function: "<Class::Function>"${repoParam}}) to confirm Blueprint call sites from the refreshed manifest.`;
+
+    case 'find_native_blueprint_references':
+      return `\n\n---\n**Next:** Use expand_blueprint_chain({asset_path: "<asset_path>", chain_anchor_id: "<chain_anchor_id>"${repoParam}}) on any confirmed reference to walk the local Blueprint chain.`;
+
+    case 'expand_blueprint_chain':
+      return `\n\n---\n**Next:** Inspect adjacent anchor nodes from the returned chain, or rerun find_native_blueprint_references() for another native entry point.`;
+
+    case 'find_blueprints_derived_from_native_class':
+      return `\n\n---\n**Next:** Choose a native function on that class and run find_native_blueprint_references({function: "<Class::Function>"${repoParam}}).`;
+
     case 'query':
       return `\n\n---\n**Next:** To understand a specific symbol in depth, use context({name: "<symbol_name>"${repoParam}}) to see categorized refs and process participation.`;
 

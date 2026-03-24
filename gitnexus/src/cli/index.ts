@@ -118,6 +118,39 @@ program
   .option('-r, --repo <name>', 'Target repository')
   .action(createLazyAction(() => import('./tool.js'), 'cypherCommand'));
 
+program
+  .command('unreal-sync')
+  .description('Refresh the Unreal Blueprint asset manifest for the current indexed repo')
+  .option('-r, --repo <name>', 'Target repository')
+  .action(createLazyAction(() => import('./tool.js'), 'syncUnrealAssetManifestCommand'));
+
+program
+  .command('unreal-find-refs [functionName]')
+  .description('Find confirmed Blueprint references to a native C++ function via the Unreal analyzer')
+  .option('-r, --repo <name>', 'Target repository')
+  .option('-u, --uid <uid>', 'Direct symbol UID (zero-ambiguity lookup)')
+  .option('-c, --class-name <name>', 'Owning native class name')
+  .option('-f, --file <path>', 'Source file path to disambiguate the function')
+  .option('--refresh-manifest', 'Refresh the Unreal asset manifest before searching')
+  .option('--max-candidates <n>', 'Cap the Blueprint candidate set passed to the Unreal analyzer')
+  .action(createLazyAction(() => import('./tool.js'), 'findNativeBlueprintReferencesCommand'));
+
+program
+  .command('unreal-expand-chain <assetPath> <chainAnchorId>')
+  .description('Expand a Blueprint chain from a confirmed Unreal reference anchor')
+  .option('-r, --repo <name>', 'Target repository')
+  .option('-d, --direction <dir>', 'upstream or downstream', 'downstream')
+  .option('--depth <n>', 'Maximum Blueprint traversal depth')
+  .action(createLazyAction(() => import('./tool.js'), 'expandBlueprintChainCommand'));
+
+program
+  .command('unreal-derived-blueprints <className>')
+  .description('List Blueprint assets derived from a native C++ class via the Unreal manifest')
+  .option('-r, --repo <name>', 'Target repository')
+  .option('--refresh-manifest', 'Refresh the Unreal asset manifest before searching')
+  .option('--max-results <n>', 'Maximum Blueprint assets to return')
+  .action(createLazyAction(() => import('./tool.js'), 'findBlueprintsDerivedFromNativeClassCommand'));
+
 // ─── Eval Server (persistent daemon for SWE-bench) ─────────────────
 
 program

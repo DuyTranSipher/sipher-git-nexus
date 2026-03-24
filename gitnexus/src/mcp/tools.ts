@@ -40,6 +40,86 @@ on other tools (query, context, impact, etc.) to target the correct one.`,
     },
   },
   {
+    name: 'sync_unreal_asset_manifest',
+    description: `Refresh the Unreal Blueprint asset manifest for a repository.
+
+Uses the configured Unreal Editor commandlet to enumerate Blueprint assets and
+store a manifest under .gitnexus/unreal/asset-manifest.json.
+
+WHEN TO USE: Before Blueprint-reference queries, after large Blueprint changes, or
+to validate Unreal analyzer configuration.
+AFTER THIS: Use find_native_blueprint_references() or find_blueprints_derived_from_native_class().`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repo: { type: 'string', description: 'Repository name or path. Omit if only one repo is indexed.' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'find_native_blueprint_references',
+    description: `Find direct Blueprint graph references to a native C++ function using the Unreal analyzer.
+
+This is a hybrid query: GitNexus uses the local Blueprint asset manifest to shortlist
+candidates, then invokes the Unreal Editor-side analyzer to confirm exact graph nodes.
+
+WHEN TO USE: You have a C++ UFUNCTION or native method and need the Blueprint call sites.
+AFTER THIS: Use expand_blueprint_chain() on a returned chain_anchor_id to walk the Blueprint flow.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        function: { type: 'string', description: 'Native function name or qualified name (for example "ULyraWeaponSpawner::GetPickupInstigator").' },
+        symbol_uid: { type: 'string', description: 'Direct symbol UID from prior GitNexus results.' },
+        class_name: { type: 'string', description: 'Owning native class name to disambiguate overloaded or same-name functions.' },
+        file_path: { type: 'string', description: 'Source file path to disambiguate the target function.' },
+        refresh_manifest: { type: 'boolean', description: 'Refresh the Unreal asset manifest before searching.', default: false },
+        max_candidates: { type: 'number', description: 'Cap the manifest-derived Blueprint candidates passed to the Unreal analyzer.', default: 200 },
+        repo: { type: 'string', description: 'Repository name or path. Omit if only one repo is indexed.' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'expand_blueprint_chain',
+    description: `Expand a Blueprint execution/call chain from a previously confirmed reference node.
+
+Uses the Unreal analyzer to walk graph links upstream or downstream starting from
+a chain anchor returned by find_native_blueprint_references().
+
+WHEN TO USE: After finding a direct Blueprint call node and you need local Blueprint flow context.
+AFTER THIS: Inspect returned nodes or continue expansion from another anchor.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        asset_path: { type: 'string', description: 'Blueprint asset path containing the anchor node.' },
+        chain_anchor_id: { type: 'string', description: 'Anchor identifier returned from find_native_blueprint_references().' },
+        direction: { type: 'string', description: 'Chain traversal direction.', enum: ['upstream', 'downstream'], default: 'downstream' },
+        max_depth: { type: 'number', description: 'Maximum Blueprint traversal depth.', default: 5 },
+        repo: { type: 'string', description: 'Repository name or path. Omit if only one repo is indexed.' },
+      },
+      required: ['asset_path', 'chain_anchor_id'],
+    },
+  },
+  {
+    name: 'find_blueprints_derived_from_native_class',
+    description: `List Blueprint assets derived from a native C++ class using the Unreal asset manifest.
+
+WHEN TO USE: To discover candidate Blueprint assets for a native class before deeper graph analysis,
+or to validate manifest coverage for a gameplay type.
+AFTER THIS: Use find_native_blueprint_references() for function-level graph references.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        class_name: { type: 'string', description: 'Native class name to search for in Blueprint ancestry.' },
+        refresh_manifest: { type: 'boolean', description: 'Refresh the Unreal asset manifest before searching.', default: false },
+        max_results: { type: 'number', description: 'Maximum Blueprint assets to return.', default: 200 },
+        repo: { type: 'string', description: 'Repository name or path. Omit if only one repo is indexed.' },
+      },
+      required: ['class_name'],
+    },
+  },
+  {
     name: 'query',
     description: `Query the code knowledge graph for execution flows related to a concept.
 Returns processes (call chains) ranked by relevance, each with its symbols and file locations.

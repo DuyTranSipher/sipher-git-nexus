@@ -18,6 +18,22 @@ import {
   cleanupOldKuzuFiles,
   type RegistryEntry,
 } from '../../storage/repo-manager.js';
+import {
+  ensureUnrealStorage,
+  getUnrealStoragePaths,
+  loadUnrealAssetManifest,
+  loadUnrealConfig,
+} from '../../unreal/config.js';
+import {
+  expandBlueprintChain,
+  findNativeBlueprintReferences,
+  syncUnrealAssetManifest,
+} from '../../unreal/bridge.js';
+import type {
+  NativeFunctionTarget,
+  UnrealAssetManifest,
+  UnrealBlueprintCandidate,
+} from '../../unreal/types.js';
 // AI context generation is CLI-only (gitnexus analyze)
 // import { generateAIContextFiles } from '../../cli/ai-context.js';
 
@@ -318,6 +334,14 @@ export class LocalBackend {
         return this.detectChanges(repo, params);
       case 'rename':
         return this.rename(repo, params);
+      case 'sync_unreal_asset_manifest':
+        return this.syncUnrealAssetManifestTool(repo);
+      case 'find_native_blueprint_references':
+        return this.findNativeBlueprintReferencesTool(repo, params);
+      case 'expand_blueprint_chain':
+        return this.expandBlueprintChainTool(repo, params);
+      case 'find_blueprints_derived_from_native_class':
+        return this.findBlueprintsDerivedFromNativeClassTool(repo, params);
       // Legacy aliases for backwards compatibility
       case 'search':
         return this.query(repo, params);
@@ -331,6 +355,307 @@ export class LocalBackend {
   }
 
   // ─── Tool Implementations ────────────────────────────────────────
+
+  private async resolveNativeFunctionTarget(repo: RepoHandle, params: {
+    function?: string;
+    symbol_uid?: string;
+    class_name?: string;
+    file_path?: string;
+  }): Promise<{ error?: string; status?: 'ambiguous'; candidates?: any[]; target?: NativeFunctionTarget }> {
+    await this.ensureInitialized(repo.id);
+
+    const qualifiedInput = params.function?.trim() || '';
+    const explicitClass = params.class_name?.trim()
+      || (qualifiedInput.includes('::') ? qualifiedInput.split('::').slice(0, -1).join('::') : '');
+    const symbolName = params.symbol_uid
+      ? ''
+      : (qualifiedInput.includes('::') ? qualifiedInput.split('::').at(-1)! : qualifiedInput);
+
+    if (!params.symbol_uid && !symbolName) {
+      return { error: 'Either "function" or "symbol_uid" is required.' };
+    }
+
+    const rows = await executeParameterized(repo.id, `
+      MATCH (n)
+      WHERE labels(n)[0] IN ['Function', 'Method']
+        AND (($symbolId = '') OR n.id = $symbolId)
+        AND (($symbolName = '') OR n.name = $symbolName)
+        AND (($filePath = '') OR n.filePath = $filePath)
+      OPTIONAL MATCH (owner)-[:CodeRelation {type: 'HAS_METHOD'}]->(n)
+      RETURN
+        n.id AS symbolId,
+        n.name AS symbolName,
+        labels(n)[0] AS symbolType,
+        n.filePath AS filePath,
+        n.startLine AS startLine,
+        owner.name AS ownerClass
+      LIMIT 25
+    `, {
+      symbolId: params.symbol_uid || '',
+      symbolName,
+      filePath: params.file_path || '',
+    });
+
+    const normalizedClass = explicitClass.toLowerCase();
+    const candidates = rows
+      .map((row: any) => {
+        const ownerClass = row.ownerClass || row[5] || undefined;
+        const qualifiedName = ownerClass ? `${ownerClass}::${row.symbolName || row[1]}` : (row.symbolName || row[1]);
+        return {
+          symbol_id: row.symbolId || row[0],
+          symbol_name: row.symbolName || row[1],
+          symbol_type: row.symbolType || row[2],
+          class_name: ownerClass,
+          file_path: row.filePath || row[3],
+          start_line: row.startLine || row[4],
+          symbol_key: qualifiedName,
+          qualified_name: qualifiedName,
+        } satisfies NativeFunctionTarget;
+      })
+      .filter((candidate: NativeFunctionTarget) => {
+        if (!normalizedClass) return true;
+        return (candidate.class_name || '').toLowerCase() === normalizedClass;
+      });
+
+    if (candidates.length === 0) {
+      return { error: `Native function '${qualifiedInput || params.symbol_uid}' not found.` };
+    }
+
+    if (candidates.length > 1) {
+      return {
+        status: 'ambiguous',
+        candidates: candidates.map(candidate => ({
+          symbol_id: candidate.symbol_id,
+          symbol_key: candidate.symbol_key,
+          class_name: candidate.class_name,
+          file_path: candidate.file_path,
+          start_line: candidate.start_line,
+        })),
+      };
+    }
+
+    return { target: candidates[0] };
+  }
+
+  private shortlistBlueprintCandidates(
+    target: NativeFunctionTarget,
+    manifest: UnrealAssetManifest,
+    maxCandidates = 200,
+  ): UnrealBlueprintCandidate[] {
+    const normalizedClass = (target.class_name || '').toLowerCase();
+    const normalizedQualified = target.qualified_name.toLowerCase();
+    const normalizedSymbol = target.symbol_key.toLowerCase();
+    const normalizedName = target.symbol_name.toLowerCase();
+
+    const scored = manifest.assets.map((asset) => {
+      const nativeParents = (asset.native_parents || []).map(v => v.toLowerCase());
+      const nativeFunctionRefs = (asset.native_function_refs || []).map(v => v.toLowerCase());
+      const dependencies = (asset.dependencies || []).map(v => v.toLowerCase());
+
+      let score = 0;
+      let reason: UnrealBlueprintCandidate['reason'] = 'manifest';
+
+      if (normalizedClass && nativeParents.some(parent => parent === normalizedClass || parent.endsWith(`.${normalizedClass}`))) {
+        score = 90;
+        reason = 'native_parent';
+      }
+
+      if (nativeFunctionRefs.some(ref =>
+        ref === normalizedQualified || ref === normalizedSymbol || ref === normalizedName || ref.endsWith(normalizedQualified)
+      )) {
+        score = 120;
+        reason = 'native_function_ref';
+      }
+
+      if (dependencies.some(dep =>
+        dep.includes(normalizedQualified) || dep.includes(normalizedSymbol) || (normalizedClass && dep.includes(normalizedClass))
+      )) {
+        score = Math.max(score, 75);
+        if (reason !== 'native_function_ref') {
+          reason = 'dependency';
+        }
+      }
+
+      if (score === 0 && normalizedClass && (asset.parent_class || '').toLowerCase().includes(normalizedClass)) {
+        score = 60;
+      }
+
+      return {
+        score,
+        candidate: {
+          asset_path: asset.asset_path,
+          generated_class: asset.generated_class,
+          parent_class: asset.parent_class,
+          reason,
+        } satisfies UnrealBlueprintCandidate,
+      };
+    });
+
+    const filtered = scored.filter(item => item.score > 0).sort((a, b) => b.score - a.score);
+    if (filtered.length === 0) {
+      return manifest.assets.slice(0, maxCandidates).map(asset => ({
+        asset_path: asset.asset_path,
+        generated_class: asset.generated_class,
+        parent_class: asset.parent_class,
+        reason: 'manifest',
+      }));
+    }
+
+    return filtered.slice(0, maxCandidates).map(item => item.candidate);
+  }
+
+  private async ensureUnrealReady(repo: RepoHandle, refreshManifest = false): Promise<{
+    config: NonNullable<Awaited<ReturnType<typeof loadUnrealConfig>>>;
+    manifest: UnrealAssetManifest;
+    manifestPath: string;
+    manifestRefreshed: boolean;
+  } | { error: string }> {
+    const config = await loadUnrealConfig(repo.storagePath);
+    if (!config) {
+      const paths = getUnrealStoragePaths(repo.storagePath);
+      return {
+        error: `Unreal analyzer is not configured for this repo. Create ${paths.config_path} with editor_cmd and project_path.`,
+      };
+    }
+
+    await ensureUnrealStorage(repo.storagePath);
+    const paths = getUnrealStoragePaths(repo.storagePath);
+    let manifest = refreshManifest ? null : await loadUnrealAssetManifest(repo.storagePath);
+    let manifestRefreshed = false;
+
+    if (!manifest) {
+      const syncResult = await syncUnrealAssetManifest(repo.storagePath, config);
+      if (syncResult.status === 'error') {
+        return { error: syncResult.error || 'Failed to build Unreal asset manifest.' };
+      }
+      manifest = await loadUnrealAssetManifest(repo.storagePath);
+      manifestRefreshed = true;
+    }
+
+    if (!manifest) {
+      return { error: 'Unreal asset manifest is missing after sync.' };
+    }
+
+    return {
+      config,
+      manifest,
+      manifestPath: paths.manifest_path,
+      manifestRefreshed,
+    };
+  }
+
+  private async syncUnrealAssetManifestTool(repo: RepoHandle): Promise<any> {
+    const config = await loadUnrealConfig(repo.storagePath);
+    if (!config) {
+      const paths = getUnrealStoragePaths(repo.storagePath);
+      return {
+        error: `Unreal analyzer is not configured for this repo. Create ${paths.config_path} with editor_cmd and project_path.`,
+      };
+    }
+
+    return syncUnrealAssetManifest(repo.storagePath, config);
+  }
+
+  private async findNativeBlueprintReferencesTool(repo: RepoHandle, params: {
+    function?: string;
+    symbol_uid?: string;
+    class_name?: string;
+    file_path?: string;
+    refresh_manifest?: boolean;
+    max_candidates?: number;
+  }): Promise<any> {
+    const targetResult = await this.resolveNativeFunctionTarget(repo, params);
+    if (targetResult.error || targetResult.status === 'ambiguous') {
+      return targetResult;
+    }
+
+    const unrealState = await this.ensureUnrealReady(repo, params.refresh_manifest ?? false);
+    if ('error' in unrealState) {
+      return unrealState;
+    }
+
+    const candidateAssets = this.shortlistBlueprintCandidates(
+      targetResult.target!,
+      unrealState.manifest,
+      params.max_candidates || 200,
+    );
+
+    const result = await findNativeBlueprintReferences(
+      repo.storagePath,
+      unrealState.config,
+      targetResult.target!,
+      candidateAssets,
+      unrealState.manifestPath,
+    );
+
+    return {
+      ...result,
+      manifest_refreshed: unrealState.manifestRefreshed,
+    };
+  }
+
+  private async expandBlueprintChainTool(repo: RepoHandle, params: {
+    asset_path?: string;
+    chain_anchor_id?: string;
+    direction?: 'upstream' | 'downstream';
+    max_depth?: number;
+  }): Promise<any> {
+    if (!params.asset_path || !params.chain_anchor_id) {
+      return { error: '"asset_path" and "chain_anchor_id" are required.' };
+    }
+
+    const unrealState = await this.ensureUnrealReady(repo, false);
+    if ('error' in unrealState) {
+      return unrealState;
+    }
+
+    return expandBlueprintChain(
+      repo.storagePath,
+      unrealState.config,
+      params.asset_path,
+      params.chain_anchor_id,
+      params.direction || 'downstream',
+      params.max_depth || 5,
+    );
+  }
+
+  private async findBlueprintsDerivedFromNativeClassTool(repo: RepoHandle, params: {
+    class_name?: string;
+    refresh_manifest?: boolean;
+    max_results?: number;
+  }): Promise<any> {
+    if (!params.class_name?.trim()) {
+      return { error: '"class_name" is required.' };
+    }
+
+    const unrealState = await this.ensureUnrealReady(repo, params.refresh_manifest ?? false);
+    if ('error' in unrealState) {
+      return unrealState;
+    }
+
+    const normalizedClass = params.class_name.trim().toLowerCase();
+    const matches = unrealState.manifest.assets
+      .filter(asset =>
+        (asset.native_parents || []).some(parent => {
+          const normalizedParent = parent.toLowerCase();
+          return normalizedParent === normalizedClass || normalizedParent.endsWith(`.${normalizedClass}`);
+        })
+      )
+      .slice(0, params.max_results || 200)
+      .map(asset => ({
+        asset_path: asset.asset_path,
+        generated_class: asset.generated_class,
+        parent_class: asset.parent_class,
+        reason: 'native_parent' as const,
+      }));
+
+    return {
+      class_name: params.class_name.trim(),
+      manifest_path: unrealState.manifestPath,
+      manifest_refreshed: unrealState.manifestRefreshed,
+      blueprints: matches,
+    };
+  }
 
   /**
    * Query tool — process-grouped search.

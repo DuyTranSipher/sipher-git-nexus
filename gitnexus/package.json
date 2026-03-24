@@ -1,17 +1,17 @@
 {
-  "name": "gitnexus",
-  "version": "1.4.6",
-  "description": "Graph-powered code intelligence for AI agents. Index any codebase, query via MCP or CLI.",
-  "author": "Abhigyan Patwari",
+  "name": "@duytransipher/gitnexus",
+  "version": "1.4.6-sipher.1",
+  "description": "Sipher-maintained fork of GitNexus for graph-powered code intelligence via MCP and CLI.",
+  "author": "DuyTranSipher",
   "license": "PolyForm-Noncommercial-1.0.0",
-  "homepage": "https://github.com/abhigyanpatwari/GitNexus#readme",
+  "homepage": "https://github.com/DuyTranSipher/sipher-git-nexus#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/abhigyanpatwari/GitNexus.git",
+    "url": "git+https://github.com/DuyTranSipher/sipher-git-nexus.git",
     "directory": "gitnexus"
   },
   "bugs": {
-    "url": "https://github.com/abhigyanpatwari/GitNexus/issues"
+    "url": "https://github.com/DuyTranSipher/sipher-git-nexus/issues"
   },
   "keywords": [
     "mcp",
@@ -39,6 +39,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx watch src/cli/index.ts",
+    "pack:dry-run": "npm pack --dry-run",
     "test": "vitest run",
     "test:unit": "vitest run test/unit",
     "test:integration": "vitest run test/integration",
@@ -46,7 +47,7 @@
     "test:coverage": "vitest run --coverage",
     "prepare": "npm run build",
     "postinstall": "node scripts/patch-tree-sitter-swift.cjs",
-    "prepack": "npm run build && chmod +x dist/cli/index.js"
+    "prepack": "npm run build && node scripts/ensure-cli-executable.cjs"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.0.0",

@@ -1,10 +1,12 @@
 # GitNexus
 
+A Sipher-maintained npm distribution of GitNexus.
+
 **Graph-powered code intelligence for AI agents.** Index any codebase into a knowledge graph, then query it via MCP or CLI.
 
 Works with **Cursor**, **Claude Code**, **Windsurf**, **Cline**, **OpenCode**, and any MCP-compatible tool.
 
-[![npm version](https://img.shields.io/npm/v/gitnexus.svg)](https://www.npmjs.com/package/gitnexus)
+[![npm version](https://img.shields.io/npm/v/%40duytransipher%2Fgitnexus.svg)](https://www.npmjs.com/package/@duytransipher/gitnexus)
 [![License: PolyForm Noncommercial](https://img.shields.io/badge/License-PolyForm%20Noncommercial-blue.svg)](https://polyformproject.org/licenses/noncommercial/1.0.0/)
 
 ---
@@ -18,13 +20,19 @@ AI coding tools don't understand your codebase structure. They edit a function w
 ## Quick Start
 
 ```bash
-# Index your repo (run from repo root)
-npx gitnexus analyze
+# Run once without installing globally
+npx @duytransipher/gitnexus@latest analyze
 ```
 
 That's it. This indexes the codebase, installs agent skills, registers Claude Code hooks, and creates `AGENTS.md` / `CLAUDE.md` context files — all in one command.
 
-To configure MCP for your editor, run `npx gitnexus setup` once — or set it up manually below.
+Install globally if you want the persistent `gitnexus` CLI:
+
+```bash
+npm install -g @duytransipher/gitnexus
+```
+
+To configure MCP for your editor, run `npx @duytransipher/gitnexus@latest setup` once — or set it up manually below. After a global install, the executable name stays `gitnexus`.
 
 `gitnexus setup` auto-detects your editors and writes the correct global MCP config. You only need to run it once.
 
@@ -52,7 +60,7 @@ If you prefer to configure manually instead of using `gitnexus setup`:
 ### Claude Code (full support — MCP + skills + hooks)
 
 ```bash
-claude mcp add gitnexus -- npx -y gitnexus@latest mcp
+claude mcp add gitnexus -- npx -y @duytransipher/gitnexus@latest mcp
 ```
 
 ### Cursor / Windsurf
@@ -64,7 +72,7 @@ Add to `~/.cursor/mcp.json` (global — works for all projects):
   "mcpServers": {
     "gitnexus": {
       "command": "npx",
-      "args": ["-y", "gitnexus@latest", "mcp"]
+      "args": ["-y", "@duytransipher/gitnexus@latest", "mcp"]
     }
   }
 }
@@ -79,7 +87,7 @@ Add to `~/.config/opencode/config.json`:
   "mcp": {
     "gitnexus": {
       "command": "npx",
-      "args": ["-y", "gitnexus@latest", "mcp"]
+      "args": ["-y", "@duytransipher/gitnexus@latest", "mcp"]
     }
   }
 }
@@ -175,6 +183,14 @@ GitNexus can bridge into an Unreal Editor commandlet to answer "which Blueprints
   "timeout_ms": 300000
 }
 ```
+
+From this source repo, you can do both with:
+
+```powershell
+pwsh -File .\gitnexus\scripts\setup-unreal-gitnexus.ps1 -ProjectRoot D:\Projects\git_nexus_ue_lyra
+```
+
+The script fails if the plugin or config already exists unless you pass `-Force`.
 
 3. Refresh the manifest with `gitnexus unreal-sync`.
 4. Query references with `gitnexus unreal-find-refs "AMyActor::MyBlueprintCallableFunction"`.

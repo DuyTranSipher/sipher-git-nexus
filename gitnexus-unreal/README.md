@@ -29,6 +29,14 @@ Create `.gitnexus/unreal/config.json` in the indexed repo:
 }
 ```
 
+If you are working from this source checkout, you can bootstrap the plugin install and config in one step:
+
+```powershell
+pwsh -File .\gitnexus\scripts\setup-unreal-gitnexus.ps1 -ProjectRoot D:\Projects\git_nexus_ue_lyra
+```
+
+The script is safe by default. If `Plugins\GitNexusUnreal` or `.gitnexus\unreal\config.json` already exists, it stops unless you pass `-Force`.
+
 ## Expected Operations
 
 - `SyncAssets`

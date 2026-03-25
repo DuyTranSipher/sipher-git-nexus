@@ -1,3 +1,58 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Development Commands
+
+All CLI package commands run from `gitnexus/`:
+
+```bash
+npm install                          # Install dependencies
+npm run build                        # Compile TypeScript to dist/
+npm run dev                          # Run CLI in watch mode (tsx)
+npm test                             # Full Vitest suite
+npm run test:unit                    # Fast unit tests only
+npm run test:integration             # Fixture-backed and CLI flow tests
+npm run test:coverage                # Generate coverage artifacts
+npx vitest run test/unit/foo.test.ts # Run a single test file
+npx tsc --noEmit                     # TypeScript typecheck (CI gate)
+```
+
+Web UI commands run from `gitnexus-web/`:
+
+```bash
+npm run dev    # Vite dev server
+npm run build  # Production build
+```
+
+## Architecture
+
+This is a hybrid monorepo (no npm workspaces). `gitnexus/` is the primary published npm package (`@duytransipher/gitnexus`). `gitnexus-web/` is a separate Vite/React app. Other directories (`gitnexus-claude-plugin/`, `gitnexus-cursor-integration/`, `gitnexus-unreal/`, `eval/`) are standalone integrations.
+
+### gitnexus/src/ layout
+
+- `cli/` — CLI commands (analyze, clean, list, serve, mcp, etc.)
+- `core/` — Indexing pipeline: graph construction, tree-sitter parsing, search (BM25 + semantic), embeddings, clustering, wiki generation
+- `mcp/` — MCP server, tools, and resources exposed to AI agents
+- `storage/` — Git operations and repo-manager (registry at `~/.gitnexus/`)
+- `server/` — HTTP/Express server for bridge mode (`gitnexus serve`)
+- `config/`, `types/` — Shared configuration and type definitions
+- `unreal/` — Unreal Engine blueprint analysis
+
+### Test setup
+
+Vitest with two project groups: `lbug-db` (database tests, runs sequentially) and `default` (everything else, parallel). Uses `forks` pool for N-API native module isolation. Tests under `gitnexus/test/unit/` and `gitnexus/test/integration/`, fixtures in `gitnexus/test/fixtures/`.
+
+### Key tech
+
+ESM-only TypeScript (ES2022 target, NodeNext modules). Tree-sitter for AST parsing (13 languages). LadybugDB for graph storage. Graphology for in-memory graph operations and community detection.
+
+## Coding Conventions
+
+- 2-space indentation, no dedicated formatter — follow surrounding code
+- `camelCase` functions/variables, `PascalCase` classes/types, `kebab-case` filenames
+- Conventional Commits: `feat:`, `fix:`, scoped like `fix(web):`, imperative subject
+
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 

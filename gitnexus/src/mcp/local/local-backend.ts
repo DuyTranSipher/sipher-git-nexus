@@ -264,7 +264,13 @@ export class LocalBackend {
       return this.repos.values().next().value!;
     }
 
-    return null; // Multiple repos, no param — ambiguous
+    // Multiple repos — try to match by current working directory
+    const cwd = process.cwd();
+    for (const handle of this.repos.values()) {
+      if (cwd.startsWith(handle.repoPath)) return handle;
+    }
+
+    return null; // Multiple repos, no CWD match — ambiguous
   }
 
   // ─── Lazy LadybugDB Init ────────────────────────────────────────────

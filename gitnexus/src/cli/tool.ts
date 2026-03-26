@@ -18,6 +18,9 @@
 
 import { writeSync } from 'node:fs';
 import { LocalBackend } from '../mcp/local/local-backend.js';
+import { withUnrealProgress } from './unreal-progress.js';
+
+const isUnrealError = (r: any) => r?.status === 'error' || r?.error != null;
 
 let _backend: LocalBackend | null = null;
 
@@ -157,9 +160,18 @@ export async function syncUnrealAssetManifestCommand(options?: {
   repo?: string;
 }): Promise<void> {
   const backend = await getBackend();
-  const result = await backend.callTool('sync_unreal_asset_manifest', {
-    repo: options?.repo,
-  });
+  const result = await withUnrealProgress(
+    () => backend.callTool('sync_unreal_asset_manifest', { repo: options?.repo }),
+    { phaseLabel: 'Syncing Unreal asset manifest', successLabel: 'Manifest synced', failLabel: 'Manifest sync failed', isError: isUnrealError },
+  );
+  if (result?.status === 'error') {
+    console.error(`\n  Error: ${result.error}\n`);
+    process.exit(1);
+  }
+  if (result?.asset_count != null) {
+    console.log(`  ${result.asset_count.toLocaleString()} Blueprint assets indexed`);
+    if (result.manifest_path) console.log(`  ${result.manifest_path}`);
+  }
   output(result);
 }
 
@@ -177,15 +189,22 @@ export async function findNativeBlueprintReferencesCommand(functionName: string,
   }
 
   const backend = await getBackend();
-  const result = await backend.callTool('find_native_blueprint_references', {
-    function: functionName || undefined,
-    symbol_uid: options?.uid,
-    class_name: options?.className,
-    file_path: options?.file,
-    refresh_manifest: options?.refreshManifest ?? false,
-    max_candidates: options?.maxCandidates ? parseInt(options.maxCandidates, 10) : undefined,
-    repo: options?.repo,
-  });
+  const result = await withUnrealProgress(
+    () => backend.callTool('find_native_blueprint_references', {
+      function: functionName || undefined,
+      symbol_uid: options?.uid,
+      class_name: options?.className,
+      file_path: options?.file,
+      refresh_manifest: options?.refreshManifest ?? false,
+      max_candidates: options?.maxCandidates ? parseInt(options.maxCandidates, 10) : undefined,
+      repo: options?.repo,
+    }),
+    { phaseLabel: 'Scanning Blueprints for native references', successLabel: 'Blueprint scan complete', failLabel: 'Blueprint scan failed', isError: isUnrealError },
+  );
+  if (result?.status === 'error') {
+    console.error(`\n  Error: ${result.error}\n`);
+    process.exit(1);
+  }
   output(result);
 }
 
@@ -200,13 +219,20 @@ export async function expandBlueprintChainCommand(assetPath: string, chainAnchor
   }
 
   const backend = await getBackend();
-  const result = await backend.callTool('expand_blueprint_chain', {
-    asset_path: assetPath,
-    chain_anchor_id: chainAnchorId,
-    direction: options?.direction || 'downstream',
-    max_depth: options?.depth ? parseInt(options.depth, 10) : undefined,
-    repo: options?.repo,
-  });
+  const result = await withUnrealProgress(
+    () => backend.callTool('expand_blueprint_chain', {
+      asset_path: assetPath,
+      chain_anchor_id: chainAnchorId,
+      direction: options?.direction || 'downstream',
+      max_depth: options?.depth ? parseInt(options.depth, 10) : undefined,
+      repo: options?.repo,
+    }),
+    { phaseLabel: 'Expanding Blueprint chain', successLabel: 'Chain expanded', failLabel: 'Chain expansion failed', isError: isUnrealError },
+  );
+  if (result?.status === 'error') {
+    console.error(`\n  Error: ${result.error}\n`);
+    process.exit(1);
+  }
   output(result);
 }
 
@@ -221,11 +247,18 @@ export async function findBlueprintsDerivedFromNativeClassCommand(className: str
   }
 
   const backend = await getBackend();
-  const result = await backend.callTool('find_blueprints_derived_from_native_class', {
-    class_name: className,
-    refresh_manifest: options?.refreshManifest ?? false,
-    max_results: options?.maxResults ? parseInt(options.maxResults, 10) : undefined,
-    repo: options?.repo,
-  });
+  const result = await withUnrealProgress(
+    () => backend.callTool('find_blueprints_derived_from_native_class', {
+      class_name: className,
+      refresh_manifest: options?.refreshManifest ?? false,
+      max_results: options?.maxResults ? parseInt(options.maxResults, 10) : undefined,
+      repo: options?.repo,
+    }),
+    { phaseLabel: 'Finding derived Blueprints', successLabel: 'Derived Blueprint search complete', failLabel: 'Derived Blueprint search failed', isError: isUnrealError },
+  );
+  if (result?.status === 'error') {
+    console.error(`\n  Error: ${result.error}\n`);
+    process.exit(1);
+  }
   output(result);
 }

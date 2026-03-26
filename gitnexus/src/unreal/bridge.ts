@@ -63,8 +63,18 @@ async function readUELogErrors(config: UnrealConfig): Promise<string> {
     const logPath = path.join(projectDir, 'Saved', 'Logs', `${projectName}.log`);
     const content = await fs.readFile(logPath, 'utf-8');
     const lines = content.split(/\r?\n/);
+    const stripped = (l: string) => l.replace(/^\[.*?\]\[\s*\d+\]/, '');
+    // Skip callstack lines, driver errors, and empty error lines
+    const isNoise = (l: string) => {
+      const s = stripped(l);
+      return /^LogWindows.*Failed to get driver/i.test(s)
+        || /\[Callstack\]/i.test(s)
+        || /^LogWindows: Error:\s*$/i.test(s)
+        || /^LogWindows: Error: ===/.test(s)
+        || /^LogWindows: Error: Fatal error!/i.test(s);
+    };
     const errorLines = lines.filter(l =>
-      /\bError\b/i.test(l) && !/^LogWindows.*Failed to get driver/i.test(l.replace(/^\[.*?\]\[\s*\d+\]/, ''))
+      /\bError\b/i.test(l) && !isNoise(l)
     );
     if (errorLines.length === 0) return '';
     return 'UE Log errors:\n' + errorLines.slice(-10).join('\n');
@@ -102,6 +112,23 @@ export async function syncUnrealAssetManifest(
       warnings: [],
     };
   } catch (error: any) {
+    // UE may exit non-zero due to Blueprint compilation warnings even though
+    // the commandlet completed and wrote valid output. Try reading the file first.
+    try {
+      const stdout = error?.stdout ? String(error.stdout).trim() : '';
+      const manifest = await readOutputJson<UnrealAssetManifest>(outputPath, stdout);
+      if (manifest && Array.isArray(manifest.assets) && manifest.assets.length > 0) {
+        const manifestPath = await saveUnrealAssetManifest(storagePath, manifest);
+        return {
+          status: 'success',
+          manifest_path: manifestPath,
+          asset_count: manifest.assets.length,
+          generated_at: manifest.generated_at,
+          warnings: ['UE exited with non-zero code (likely Blueprint compilation warnings)'],
+        };
+      }
+    } catch { /* output file not readable, fall through to error */ }
+
     const stderr = error?.stderr ? String(error.stderr).trim() : '';
     const stdout = error?.stdout ? String(error.stdout).trim() : '';
     const msg = error instanceof Error ? error.message : String(error);

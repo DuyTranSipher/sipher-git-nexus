@@ -276,7 +276,7 @@ const COPY_CSV_OPTS = `(HEADER=true, ESCAPE='"', DELIM=',', QUOTE='"', PARALLEL=
 const BACKTICK_TABLES = new Set([
   'Struct', 'Enum', 'Macro', 'Typedef', 'Union', 'Namespace', 'Trait', 'Impl',
   'TypeAlias', 'Const', 'Static', 'Property', 'Record', 'Delegate', 'Annotation',
-  'Constructor', 'Template', 'Module',
+  'Constructor', 'Template', 'Module', 'Blueprint',
 ]);
 
 const escapeTableName = (table: string): string => {

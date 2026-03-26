@@ -209,6 +209,15 @@ export const analyzeCommand = async (
     updateBar(scaled, phaseLabel);
   });
 
+  // ── Phase 1.5: Blueprint Ingestion (optional) ────────────────────────
+  try {
+    const { ingestBlueprintsIntoGraph } = await import('../unreal/blueprint-ingestion.js');
+    const bpResult = await ingestBlueprintsIntoGraph(pipelineResult.graph, storagePath);
+    if (bpResult.nodesAdded > 0) {
+      updateBar(61, `Indexed ${bpResult.nodesAdded} Blueprints (${bpResult.edgesAdded} edges)`);
+    }
+  } catch { /* non-fatal — Unreal integration is optional */ }
+
   // ── Phase 2: LadybugDB (60–85%) ──────────────────────────────────────
   updateBar(60, 'Loading into LadybugDB...');
 

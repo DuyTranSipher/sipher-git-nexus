@@ -32,7 +32,9 @@ export type NodeLabel =
   | 'Delegate'
   | 'Annotation'
   | 'Constructor'
-  | 'Template';
+  | 'Template'
+  // Unreal Engine Blueprint assets
+  | 'Blueprint';
 
 
 import { SupportedLanguages } from '../../config/supported-languages.js';

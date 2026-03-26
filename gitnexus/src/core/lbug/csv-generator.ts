@@ -241,7 +241,7 @@ export const streamAllCSVsToDisk = async (
   // Multi-language node types share the same CSV shape (no isExported column)
   const multiLangHeader = 'id,name,filePath,startLine,endLine,content,description';
   const MULTI_LANG_TYPES = ['Struct', 'Enum', 'Macro', 'Typedef', 'Union', 'Namespace', 'Trait', 'Impl',
-    'TypeAlias', 'Const', 'Static', 'Property', 'Record', 'Delegate', 'Annotation', 'Constructor', 'Template', 'Module'] as const;
+    'TypeAlias', 'Const', 'Static', 'Property', 'Record', 'Delegate', 'Annotation', 'Constructor', 'Template', 'Module', 'Blueprint'] as const;
   const multiLangWriters = new Map<string, BufferedCSVWriter>();
   for (const t of MULTI_LANG_TYPES) {
     multiLangWriters.set(t, new BufferedCSVWriter(path.join(csvDir, `${t.toLowerCase()}.csv`), multiLangHeader));

@@ -16,7 +16,9 @@ export const NODE_TABLES = [
   'File', 'Folder', 'Function', 'Class', 'Interface', 'Method', 'CodeElement', 'Community', 'Process',
   // Multi-language support
   'Struct', 'Enum', 'Macro', 'Typedef', 'Union', 'Namespace', 'Trait', 'Impl',
-  'TypeAlias', 'Const', 'Static', 'Property', 'Record', 'Delegate', 'Annotation', 'Constructor', 'Template', 'Module'
+  'TypeAlias', 'Const', 'Static', 'Property', 'Record', 'Delegate', 'Annotation', 'Constructor', 'Template', 'Module',
+  // Unreal Engine Blueprint assets
+  'Blueprint'
 ] as const;
 export type NodeTableName = typeof NODE_TABLES[number];
 
@@ -192,6 +194,9 @@ export const ANNOTATION_SCHEMA = CODE_ELEMENT_BASE('Annotation');
 export const CONSTRUCTOR_SCHEMA = CODE_ELEMENT_BASE('Constructor');
 export const TEMPLATE_SCHEMA = CODE_ELEMENT_BASE('Template');
 export const MODULE_SCHEMA = CODE_ELEMENT_BASE('Module');
+
+// Unreal Engine Blueprint assets
+export const BLUEPRINT_SCHEMA = CODE_ELEMENT_BASE('Blueprint');
 
 // ============================================================================
 // RELATION TABLE SCHEMA
@@ -387,6 +392,13 @@ CREATE REL TABLE ${REL_TABLE_NAME} (
   FROM \`Annotation\` TO Process,
   FROM \`Template\` TO Process,
   FROM CodeElement TO Process,
+  FROM \`Blueprint\` TO Class,
+  FROM \`Blueprint\` TO \`Struct\`,
+  FROM \`Blueprint\` TO Method,
+  FROM \`Blueprint\` TO Function,
+  FROM \`Blueprint\` TO \`Blueprint\`,
+  FROM \`Blueprint\` TO Community,
+  FROM \`Blueprint\` TO Process,
   type STRING,
   confidence DOUBLE,
   reason STRING,
@@ -447,6 +459,7 @@ export const NODE_SCHEMA_QUERIES = [
   CONSTRUCTOR_SCHEMA,
   TEMPLATE_SCHEMA,
   MODULE_SCHEMA,
+  BLUEPRINT_SCHEMA,
 ];
 
 export const REL_SCHEMA_QUERIES = [

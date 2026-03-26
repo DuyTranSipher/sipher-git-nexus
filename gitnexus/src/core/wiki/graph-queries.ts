@@ -9,6 +9,9 @@ import { initLbug, executeQuery, closeLbug } from '../../mcp/core/lbug-adapter.j
 
 const REPO_ID = '__wiki__';
 
+const extractLabel = (v: unknown): string | undefined =>
+  Array.isArray(v) ? v[0] : typeof v === 'string' ? v : undefined;
+
 export interface FileWithExports {
   filePath: string;
   symbols: Array<{ name: string; type: string }>;
@@ -55,7 +58,7 @@ export async function getFilesWithExports(): Promise<FileWithExports[]> {
   const rows = await executeQuery(REPO_ID, `
     MATCH (f:File)-[:CodeRelation {type: 'DEFINES'}]->(n)
     WHERE n.isExported = true
-    RETURN f.filePath AS filePath, n.name AS name, labels(n)[0] AS type
+    RETURN f.filePath AS filePath, n.name AS name, labels(n) AS type
     ORDER BY f.filePath
   `);
 
@@ -63,7 +66,7 @@ export async function getFilesWithExports(): Promise<FileWithExports[]> {
   for (const row of rows) {
     const fp = row.filePath || row[0];
     const name = row.name || row[1];
-    const type = row.type || row[2];
+    const type = extractLabel(row.type || row[2]);
 
     let entry = fileMap.get(fp);
     if (!entry) {
@@ -201,7 +204,7 @@ export async function getProcessesForFiles(filePaths: string[], limit = 5): Prom
     // Get the full step trace for this process
     const stepRows = await executeQuery(REPO_ID, `
       MATCH (s)-[r:CodeRelation {type: 'STEP_IN_PROCESS'}]->(p:Process {id: '${procId.replace(/'/g, "''")}'})
-      RETURN s.name AS name, s.filePath AS filePath, labels(s)[0] AS type, r.step AS step
+      RETURN s.name AS name, s.filePath AS filePath, labels(s) AS type, r.step AS step
       ORDER BY r.step
     `);
 
@@ -214,7 +217,7 @@ export async function getProcessesForFiles(filePaths: string[], limit = 5): Prom
         step: s.step || s[3] || 0,
         name: s.name || s[0],
         filePath: s.filePath || s[1],
-        type: s.type || s[2],
+        type: extractLabel(s.type || s[2]),
       })),
     });
   }
@@ -243,7 +246,7 @@ export async function getAllProcesses(limit = 20): Promise<ProcessInfo[]> {
 
     const stepRows = await executeQuery(REPO_ID, `
       MATCH (s)-[r:CodeRelation {type: 'STEP_IN_PROCESS'}]->(p:Process {id: '${procId.replace(/'/g, "''")}'})
-      RETURN s.name AS name, s.filePath AS filePath, labels(s)[0] AS type, r.step AS step
+      RETURN s.name AS name, s.filePath AS filePath, labels(s) AS type, r.step AS step
       ORDER BY r.step
     `);
 
@@ -256,7 +259,7 @@ export async function getAllProcesses(limit = 20): Promise<ProcessInfo[]> {
         step: s.step || s[3] || 0,
         name: s.name || s[0],
         filePath: s.filePath || s[1],
-        type: s.type || s[2],
+        type: extractLabel(s.type || s[2]),
       })),
     });
   }

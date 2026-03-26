@@ -68,6 +68,14 @@ export const VALID_RELATION_TYPES = new Set(['CALLS', 'IMPORTS', 'EXTENDS', 'IMP
 /** Regex to detect write operations in user-supplied Cypher queries */
 export const CYPHER_WRITE_RE = /\b(CREATE|DELETE|SET|MERGE|REMOVE|DROP|ALTER|COPY|DETACH)\b/i;
 
+/**
+ * Extract the primary label from a KùzuDB labels() result.
+ * KùzuDB returns labels() as a string[] but does not support array indexing [0]
+ * in Cypher, so we return the full array from queries and extract here.
+ */
+const extractLabel = (v: unknown): string | undefined =>
+  Array.isArray(v) ? v[0] : typeof v === 'string' ? v : undefined;
+
 /** Check if a Cypher query contains write operations */
 export function isWriteQuery(query: string): boolean {
   return CYPHER_WRITE_RE.test(query);
@@ -377,7 +385,7 @@ export class LocalBackend {
 
     const rows = await executeParameterized(repo.id, `
       MATCH (n)
-      WHERE labels(n)[0] IN ['Function', 'Method']
+      WHERE labels(n) IN ['Function', 'Method']
         AND (($symbolId = '') OR n.id = $symbolId)
         AND (($symbolName = '') OR n.name = $symbolName)
         AND (($filePath = '') OR n.filePath = $filePath)
@@ -385,7 +393,7 @@ export class LocalBackend {
       RETURN
         n.id AS symbolId,
         n.name AS symbolName,
-        labels(n)[0] AS symbolType,
+        labels(n) AS symbolType,
         n.filePath AS filePath,
         n.startLine AS startLine,
         owner.name AS ownerClass
@@ -404,7 +412,7 @@ export class LocalBackend {
         return {
           symbol_id: row.symbolId || row[0],
           symbol_name: row.symbolName || row[1],
-          symbol_type: row.symbolType || row[2],
+          symbol_type: extractLabel(row.symbolType || row[2]),
           class_name: ownerClass,
           file_path: row.filePath || row[3],
           start_line: row.startLine || row[4],
@@ -887,7 +895,7 @@ export class LocalBackend {
         const symbols = await executeParameterized(repo.id, `
           MATCH (n)
           WHERE n.filePath = $filePath
-          RETURN n.id AS id, n.name AS name, labels(n)[0] AS type, n.filePath AS filePath, n.startLine AS startLine, n.endLine AS endLine
+          RETURN n.id AS id, n.name AS name, labels(n) AS type, n.filePath AS filePath, n.startLine AS startLine, n.endLine AS endLine
           LIMIT 3
         `, { filePath: fullPath });
         
@@ -896,7 +904,7 @@ export class LocalBackend {
             results.push({
               nodeId: sym.id || sym[0],
               name: sym.name || sym[1],
-              type: sym.type || sym[2],
+              type: extractLabel(sym.type || sym[2]),
               filePath: sym.filePath || sym[3],
               startLine: sym.startLine || sym[4],
               endLine: sym.endLine || sym[5],
@@ -1171,7 +1179,7 @@ export class LocalBackend {
     if (uid) {
       symbols = await executeParameterized(repo.id, `
         MATCH (n {id: $uid})
-        RETURN n.id AS id, n.name AS name, labels(n)[0] AS type, n.filePath AS filePath, n.startLine AS startLine, n.endLine AS endLine${include_content ? ', n.content AS content' : ''}
+        RETURN n.id AS id, n.name AS name, labels(n) AS type, n.filePath AS filePath, n.startLine AS startLine, n.endLine AS endLine${include_content ? ', n.content AS content' : ''}
         LIMIT 1
       `, { uid });
     } else {
@@ -1192,7 +1200,7 @@ export class LocalBackend {
 
       symbols = await executeParameterized(repo.id, `
         MATCH (n) ${whereClause}
-        RETURN n.id AS id, n.name AS name, labels(n)[0] AS type, n.filePath AS filePath, n.startLine AS startLine, n.endLine AS endLine${include_content ? ', n.content AS content' : ''}
+        RETURN n.id AS id, n.name AS name, labels(n) AS type, n.filePath AS filePath, n.startLine AS startLine, n.endLine AS endLine${include_content ? ', n.content AS content' : ''}
         LIMIT 10
       `, queryParams);
     }
@@ -1209,7 +1217,7 @@ export class LocalBackend {
         candidates: symbols.map((s: any) => ({
           uid: s.id || s[0],
           name: s.name || s[1],
-          kind: s.type || s[2],
+          kind: extractLabel(s.type || s[2]),
           filePath: s.filePath || s[3],
           line: s.startLine || s[4],
         })),
@@ -1224,7 +1232,7 @@ export class LocalBackend {
     const incomingRows = await executeParameterized(repo.id, `
       MATCH (caller)-[r:CodeRelation]->(n {id: $symId})
       WHERE r.type IN ['CALLS', 'IMPORTS', 'EXTENDS', 'IMPLEMENTS', 'HAS_METHOD', 'HAS_PROPERTY', 'OVERRIDES', 'ACCESSES']
-      RETURN r.type AS relType, caller.id AS uid, caller.name AS name, caller.filePath AS filePath, labels(caller)[0] AS kind
+      RETURN r.type AS relType, caller.id AS uid, caller.name AS name, caller.filePath AS filePath, labels(caller) AS kind
       LIMIT 30
     `, { symId });
 
@@ -1232,7 +1240,7 @@ export class LocalBackend {
     const outgoingRows = await executeParameterized(repo.id, `
       MATCH (n {id: $symId})-[r:CodeRelation]->(target)
       WHERE r.type IN ['CALLS', 'IMPORTS', 'EXTENDS', 'IMPLEMENTS', 'HAS_METHOD', 'HAS_PROPERTY', 'OVERRIDES', 'ACCESSES']
-      RETURN r.type AS relType, target.id AS uid, target.name AS name, target.filePath AS filePath, labels(target)[0] AS kind
+      RETURN r.type AS relType, target.id AS uid, target.name AS name, target.filePath AS filePath, labels(target) AS kind
       LIMIT 30
     `, { symId });
 
@@ -1254,7 +1262,7 @@ export class LocalBackend {
           uid: row.uid || row[1],
           name: row.name || row[2],
           filePath: row.filePath || row[3],
-          kind: row.kind || row[4],
+          kind: extractLabel(row.kind || row[4]),
         };
         if (!cats[relType]) cats[relType] = [];
         cats[relType].push(entry);
@@ -1267,7 +1275,7 @@ export class LocalBackend {
       symbol: {
         uid: sym.id || sym[0],
         name: sym.name || sym[1],
-        kind: sym.type || sym[2],
+        kind: extractLabel(sym.type || sym[2]),
         filePath: sym.filePath || sym[3],
         startLine: sym.startLine || sym[4],
         endLine: sym.endLine || sym[5],
@@ -1319,7 +1327,7 @@ export class LocalBackend {
       const members = await executeParameterized(repo.id, `
         MATCH (n)-[:CodeRelation {type: 'MEMBER_OF'}]->(c:Community)
         WHERE c.label = $clusterName OR c.heuristicLabel = $clusterName
-        RETURN DISTINCT n.name AS name, labels(n)[0] AS type, n.filePath AS filePath
+        RETURN DISTINCT n.name AS name, labels(n) AS type, n.filePath AS filePath
         LIMIT 30
       `, { clusterName: name });
       
@@ -1333,7 +1341,7 @@ export class LocalBackend {
           subCommunities: rawClusters.length,
         },
         members: members.map((m: any) => ({
-          name: m.name || m[0], type: m.type || m[1], filePath: m.filePath || m[2],
+          name: m.name || m[0], type: extractLabel(m.type || m[1]), filePath: m.filePath || m[2],
         })),
       };
     }
@@ -1351,7 +1359,7 @@ export class LocalBackend {
       const procId = proc.id || proc[0];
       const steps = await executeParameterized(repo.id, `
         MATCH (n)-[r:CodeRelation {type: 'STEP_IN_PROCESS'}]->(p {id: $procId})
-        RETURN n.name AS name, labels(n)[0] AS type, n.filePath AS filePath, r.step AS step
+        RETURN n.name AS name, labels(n) AS type, n.filePath AS filePath, r.step AS step
         ORDER BY r.step
       `, { procId });
       
@@ -1361,11 +1369,11 @@ export class LocalBackend {
           processType: proc.processType || proc[3], stepCount: proc.stepCount || proc[4],
         },
         steps: steps.map((s: any) => ({
-          step: s.step || s[3], name: s.name || s[0], type: s.type || s[1], filePath: s.filePath || s[2],
+          step: s.step || s[3], name: s.name || s[0], type: extractLabel(s.type || s[1]), filePath: s.filePath || s[2],
         })),
       };
     }
-    
+
     return { error: 'Invalid type. Use: symbol, cluster, or process' };
   }
 
@@ -1424,14 +1432,14 @@ export class LocalBackend {
       try {
         const symbols = await executeParameterized(repo.id, `
           MATCH (n) WHERE n.filePath CONTAINS $filePath
-          RETURN n.id AS id, n.name AS name, labels(n)[0] AS type, n.filePath AS filePath
+          RETURN n.id AS id, n.name AS name, labels(n) AS type, n.filePath AS filePath
           LIMIT 20
         `, { filePath: normalizedFile });
         for (const sym of symbols) {
           changedSymbols.push({
             id: sym.id || sym[0],
             name: sym.name || sym[1],
-            type: sym.type || sym[2],
+            type: extractLabel(sym.type || sym[2]),
             filePath: sym.filePath || sym[3],
             change_type: 'Modified',
           });
@@ -1695,7 +1703,7 @@ export class LocalBackend {
     const targets = await executeParameterized(repo.id, `
       MATCH (n)
       WHERE n.name = $targetName
-      RETURN n.id AS id, n.name AS name, labels(n)[0] AS type, n.filePath AS filePath
+      RETURN n.id AS id, n.name AS name, labels(n) AS type, n.filePath AS filePath
       LIMIT 1
     `, { targetName: target });
     if (targets.length === 0) return { error: `Target '${target}' not found` };
@@ -1714,8 +1722,8 @@ export class LocalBackend {
       // Batch frontier nodes into a single Cypher query per depth level
       const idList = frontier.map(id => `'${id.replace(/'/g, "''")}'`).join(', ');
       const query = direction === 'upstream'
-        ? `MATCH (caller)-[r:CodeRelation]->(n) WHERE n.id IN [${idList}] AND r.type IN [${relTypeFilter}]${confidenceFilter} RETURN n.id AS sourceId, caller.id AS id, caller.name AS name, labels(caller)[0] AS type, caller.filePath AS filePath, r.type AS relType, r.confidence AS confidence`
-        : `MATCH (n)-[r:CodeRelation]->(callee) WHERE n.id IN [${idList}] AND r.type IN [${relTypeFilter}]${confidenceFilter} RETURN n.id AS sourceId, callee.id AS id, callee.name AS name, labels(callee)[0] AS type, callee.filePath AS filePath, r.type AS relType, r.confidence AS confidence`;
+        ? `MATCH (caller)-[r:CodeRelation]->(n) WHERE n.id IN [${idList}] AND r.type IN [${relTypeFilter}]${confidenceFilter} RETURN n.id AS sourceId, caller.id AS id, caller.name AS name, labels(caller) AS type, caller.filePath AS filePath, r.type AS relType, r.confidence AS confidence`
+        : `MATCH (n)-[r:CodeRelation]->(callee) WHERE n.id IN [${idList}] AND r.type IN [${relTypeFilter}]${confidenceFilter} RETURN n.id AS sourceId, callee.id AS id, callee.name AS name, labels(callee) AS type, callee.filePath AS filePath, r.type AS relType, r.confidence AS confidence`;
       
       try {
         const related = await executeQuery(repo.id, query);
@@ -1733,7 +1741,7 @@ export class LocalBackend {
               depth,
               id: relId,
               name: rel.name || rel[2],
-              type: rel.type || rel[3],
+              type: extractLabel(rel.type || rel[3]),
               filePath,
               relationType: rel.relType || rel[5],
               confidence: rel.confidence || rel[6] || 1.0,
@@ -1823,7 +1831,7 @@ export class LocalBackend {
       target: {
         id: symId,
         name: sym.name || sym[1],
-        type: sym.type || sym[2],
+        type: extractLabel(sym.type || sym[2]),
         filePath: sym.filePath || sym[3],
       },
       direction,
@@ -1931,7 +1939,7 @@ export class LocalBackend {
     const members = await executeParameterized(repo.id, `
       MATCH (n)-[:CodeRelation {type: 'MEMBER_OF'}]->(c:Community)
       WHERE c.label = $clusterName OR c.heuristicLabel = $clusterName
-      RETURN DISTINCT n.name AS name, labels(n)[0] AS type, n.filePath AS filePath
+      RETURN DISTINCT n.name AS name, labels(n) AS type, n.filePath AS filePath
       LIMIT 30
     `, { clusterName: name });
 
@@ -1945,7 +1953,7 @@ export class LocalBackend {
         subCommunities: rawClusters.length,
       },
       members: members.map((m: any) => ({
-        name: m.name || m[0], type: m.type || m[1], filePath: m.filePath || m[2],
+        name: m.name || m[0], type: extractLabel(m.type || m[1]), filePath: m.filePath || m[2],
       })),
     };
   }
@@ -1970,7 +1978,7 @@ export class LocalBackend {
     const procId = proc.id || proc[0];
     const steps = await executeParameterized(repo.id, `
       MATCH (n)-[r:CodeRelation {type: 'STEP_IN_PROCESS'}]->(p {id: $procId})
-      RETURN n.name AS name, labels(n)[0] AS type, n.filePath AS filePath, r.step AS step
+      RETURN n.name AS name, labels(n) AS type, n.filePath AS filePath, r.step AS step
       ORDER BY r.step
     `, { procId });
 
@@ -1980,7 +1988,7 @@ export class LocalBackend {
         processType: proc.processType || proc[3], stepCount: proc.stepCount || proc[4],
       },
       steps: steps.map((s: any) => ({
-        step: s.step || s[3], name: s.name || s[0], type: s.type || s[1], filePath: s.filePath || s[2],
+        step: s.step || s[3], name: s.name || s[0], type: extractLabel(s.type || s[1]), filePath: s.filePath || s[2],
       })),
     };
   }

@@ -117,20 +117,23 @@ export async function augment(pattern: string, cwd?: string): Promise<string> {
       score: number;
     }> = [];
     
+    const extractLabel = (v: unknown): string | undefined =>
+      Array.isArray(v) ? v[0] : typeof v === 'string' ? v : undefined;
+
     for (const result of bm25Results.slice(0, 5)) {
       const escaped = result.filePath.replace(/'/g, "''");
       try {
         const symbols = await executeQuery(repoId, `
           MATCH (n) WHERE n.filePath = '${escaped}'
           AND n.name CONTAINS '${pattern.replace(/'/g, "''").split(/\s+/)[0]}'
-          RETURN n.id AS id, n.name AS name, labels(n)[0] AS type, n.filePath AS filePath
+          RETURN n.id AS id, n.name AS name, labels(n) AS type, n.filePath AS filePath
           LIMIT 3
         `);
         for (const sym of symbols) {
           symbolMatches.push({
             nodeId: sym.id || sym[0],
             name: sym.name || sym[1],
-            type: sym.type || sym[2],
+            type: extractLabel(sym.type || sym[2]),
             filePath: sym.filePath || sym[3],
             score: result.score,
           });

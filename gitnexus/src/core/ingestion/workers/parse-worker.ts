@@ -1204,7 +1204,39 @@ const processFileGroup = (
       // Compute enclosing class for Method/Constructor/Property/Function — used for both ownerId and HAS_METHOD
       // Function is included because Kotlin/Rust/Python capture class methods as Function nodes
       const needsOwner = nodeLabel === 'Method' || nodeLabel === 'Constructor' || nodeLabel === 'Property' || nodeLabel === 'Function';
-      const enclosingClassId = needsOwner ? findEnclosingClassId(nameNode || definitionNode, file.path) : null;
+      let enclosingClassId = needsOwner ? findEnclosingClassId(nameNode || definitionNode, file.path) : null;
+
+      // C/C++ out-of-line methods: extract class from qualified_identifier scope.
+      // e.g. void Duck::speak() → scope class "Duck". Since the class is declared
+      // in a header (different file), AST walk can't find it. Search accumulated
+      // batch nodes for a matching Class node instead.
+      if (!enclosingClassId && needsOwner && nodeLabel === 'Method'
+        && (language === SupportedLanguages.CPlusPlus || language === SupportedLanguages.C)) {
+        const qualifiedId = nameNode?.parent;
+        if (qualifiedId?.type === 'qualified_identifier') {
+          const scopeNode = qualifiedId.childForFieldName?.('scope')
+            ?? qualifiedId.children?.find((c: any) =>
+              (c.type === 'namespace_identifier' || c.type === 'identifier' || c.type === 'type_identifier')
+              && c !== nameNode);
+          const scopeClassName = scopeNode?.text;
+          if (scopeClassName) {
+            // Prefer the Class node defined in the canonical header (ClassName.h)
+            const matchingClasses = result.nodes.filter(n =>
+              n.label === 'Class' && n.properties.name === scopeClassName);
+            if (matchingClasses.length === 1) {
+              enclosingClassId = matchingClasses[0].id;
+            } else if (matchingClasses.length > 1) {
+              // Prefer the class in a header whose base name matches the class name
+              const preferred = matchingClasses.find(n => {
+                const fp = (n.properties.filePath as string || '').toLowerCase();
+                return fp.endsWith(`${scopeClassName.toLowerCase()}.h`)
+                  || fp.endsWith(`${scopeClassName.toLowerCase()}.hpp`);
+              });
+              enclosingClassId = (preferred || matchingClasses[0]).id;
+            }
+          }
+        }
+      }
 
       result.symbols.push({
         filePath: file.path,

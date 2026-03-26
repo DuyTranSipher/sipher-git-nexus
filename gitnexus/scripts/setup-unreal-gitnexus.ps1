@@ -108,6 +108,20 @@ function Resolve-UnrealEditorCmd {
         } catch {
         }
 
+        # Try LauncherInstalled.dat (Epic Games Launcher writes this for all engine installs)
+        try {
+            $launcherDat = Join-Path $env:LOCALAPPDATA 'EpicGames\UnrealEngineLauncher\LauncherInstalled.dat'
+            if (Test-Path -LiteralPath $launcherDat -PathType Leaf) {
+                $launcher = Get-Content -LiteralPath $launcherDat -Raw | ConvertFrom-Json
+                foreach ($entry in $launcher.InstallationList) {
+                    if ($entry.AppName -eq "UE_$EngineAssociation" -or $entry.AppName -eq $EngineAssociation) {
+                        Add-EditorCmdCandidates -Candidates $candidates -RootOrExe $entry.InstallLocation
+                    }
+                }
+            }
+        } catch {
+        }
+
         Add-EditorCmdCandidates -Candidates $candidates -RootOrExe "C:\Program Files\Epic Games\UE_$EngineAssociation"
     }
 

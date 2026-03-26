@@ -418,6 +418,23 @@ function resolveEditorCmd(explicitPath: string | undefined, engineAssociation: s
       }
     } catch { /* registry key not found */ }
 
+    // Try LauncherInstalled.dat (Epic Games Launcher writes this for all engine installs)
+    try {
+      const launcherDat = path.join(
+        process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
+        'EpicGames', 'UnrealEngineLauncher', 'LauncherInstalled.dat'
+      );
+      const launcher = JSON.parse(fsSync.readFileSync(launcherDat, 'utf-8'));
+      if (Array.isArray(launcher.InstallationList)) {
+        for (const entry of launcher.InstallationList) {
+          if (entry.AppName === `UE_${engineAssociation}` || entry.AppName === engineAssociation) {
+            const found = tryCandidates(entry.InstallLocation);
+            if (found) return found;
+          }
+        }
+      }
+    } catch { /* LauncherInstalled.dat not found or unparseable */ }
+
     // Try standard install path
     const found = tryCandidates(path.join('C:\\Program Files\\Epic Games', `UE_${engineAssociation}`));
     if (found) return found;

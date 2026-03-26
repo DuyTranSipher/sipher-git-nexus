@@ -2,13 +2,44 @@
 
 All notable changes to GitNexus will be documented in this file.
 
-## [Unreleased]
+## [1.2.0] - 2026-03-26
+
+### Added
+
+- **Unreal Blueprint graph indexing**: Blueprint assets are now first-class nodes in the LadybugDB knowledge graph, with EXTENDS, CALLS, and IMPORTS edges linking Blueprints to C++ parents and dependencies
+- **Blueprint chain expansion enrichment**: Pin-level data (exec/data split, connections, defaults), node metadata, type-specific details, and BFS traversal context are now included when expanding Blueprint chains
+- **Native Anthropic API support** for wiki generation: auto-detects Anthropic API URLs and routes directly to the Messages API instead of requiring an OpenAI-compatible proxy
+- **Failed module retry** for wiki generation: persists failed module names to metadata and retries only those on re-run, avoiding redundant LLM calls
+
+### Fixed
+
+- **LadybugDB Cypher compatibility**: replaced `labels(n)[0]` (array subscript) with `labels(n)` (returns string) across 16 query sites, fixing query failures on LadybugDB engine
+- **C++ out-of-line method resolution**: out-of-line method definitions (e.g., `ClassName::Method`) now correctly produce HAS_METHOD edges, restoring symbol type information in MCP tools
 
 ### Changed
+
 - Migrated from KuzuDB to LadybugDB v0.15 (`@ladybugdb/core`, `@ladybugdb/wasm-core`)
 - Renamed all internal paths from `kuzu` to `lbug` (storage: `.gitnexus/kuzu` → `.gitnexus/lbug`)
 - Added automatic cleanup of stale KuzuDB index files
 - LadybugDB v0.15 requires explicit VECTOR extension loading for semantic search
+
+## [1.1.0] - 2026-03-24 (Sipher fork baseline)
+
+### Added
+
+- **Unreal Engine plugin integration**: GitNexusUnreal C++ commandlet for Blueprint reference analysis from within Unreal Editor
+- **`gitnexus setup --unreal`** command for one-step Unreal plugin installation with auto-detection of `.uproject` and `UnrealEditor-Cmd.exe`
+- **Unreal Blueprint reference analysis tools** exposed via MCP for AI agent workflows
+- **Bundled Unreal plugin** in npm package (`vendor/` directory) for standalone install without source checkout
+- **Agent skills documentation** (`skills/`) for Claude Code and Cursor integration
+
+### Fixed
+
+- **Wiki generation hardening** for large repositories with improved chunking and error resilience
+- **UE commandlet error diagnostics**: captures stderr, stdout, and tails UE project log for detailed failure messages
+- **Sync output parsing** aligned with actual UE commandlet JSON format, fixing `JSON.stringify(undefined)` errors
+
+---
 
 ## [1.4.0] - 2026-03-13
 

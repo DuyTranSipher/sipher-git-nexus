@@ -9,8 +9,13 @@
 #include "EdGraph/EdGraphNode.h"
 #include "EdGraph/EdGraphPin.h"
 #include "Engine/Blueprint.h"
+#include "EdGraphSchema_K2.h"
 #include "K2Node_CallFunction.h"
 #include "K2Node_Event.h"
+#include "K2Node_IfThenElse.h"
+#include "K2Node_Switch.h"
+#include "K2Node_VariableGet.h"
+#include "K2Node_VariableSet.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Guid.h"
@@ -235,26 +240,36 @@ int32 UGitNexusBlueprintAnalyzerCommandlet::RunExpandBlueprintChain(
 		return 1;
 	}
 
+	struct FChainFrontierEntry
+	{
+		UEdGraphNode* Node;
+		int32 Depth;
+		FString TraversedFromPinName;
+		FGuid TraversedFromNodeId;
+	};
+
 	TArray<TSharedPtr<FJsonValue>> NodeValues;
 	TSet<FGuid> Visited;
-	TArray<TPair<UEdGraphNode*, int32>> Frontier;
-	Frontier.Add(TPair<UEdGraphNode*, int32>(StartNode, 0));
+	TArray<FChainFrontierEntry> Frontier;
+	Frontier.Add({ StartNode, 0, FString(), FGuid() });
 	Visited.Add(StartNode->NodeGuid);
 
 	const bool bUpstream = Direction.Equals(TEXT("upstream"), ESearchCase::IgnoreCase);
 
 	while (Frontier.Num() > 0)
 	{
-		const TPair<UEdGraphNode*, int32> Current = Frontier[0];
+		const FChainFrontierEntry Current = Frontier[0];
 		Frontier.RemoveAt(0);
 
-		NodeValues.Add(MakeShared<FJsonValueObject>(BuildChainNodeJson(Current.Key->GetGraph(), Current.Key, Current.Value)));
-		if (Current.Value >= MaxDepth)
+		NodeValues.Add(MakeShared<FJsonValueObject>(BuildChainNodeJson(
+			Current.Node->GetGraph(), Current.Node, Current.Depth,
+			Current.TraversedFromPinName, Current.TraversedFromNodeId)));
+		if (Current.Depth >= MaxDepth)
 		{
 			continue;
 		}
 
-		for (UEdGraphPin* Pin : Current.Key->Pins)
+		for (UEdGraphPin* Pin : Current.Node->Pins)
 		{
 			if (!Pin)
 			{
@@ -280,8 +295,9 @@ int32 UGitNexusBlueprintAnalyzerCommandlet::RunExpandBlueprintChain(
 					continue;
 				}
 
+				// NOTE: In diamond-shaped graphs, BFS only records the first-discovered parent.
 				Visited.Add(NextNode->NodeGuid);
-				Frontier.Add(TPair<UEdGraphNode*, int32>(NextNode, Current.Value + 1));
+				Frontier.Add({ NextNode, Current.Depth + 1, Pin->PinName.ToString(), Current.Node->NodeGuid });
 			}
 		}
 	}
@@ -419,7 +435,9 @@ TSharedPtr<FJsonObject> UGitNexusBlueprintAnalyzerCommandlet::BuildReferenceJson
 	return Object;
 }
 
-TSharedPtr<FJsonObject> UGitNexusBlueprintAnalyzerCommandlet::BuildChainNodeJson(const UEdGraph* Graph, const UEdGraphNode* Node, int32 Depth) const
+TSharedPtr<FJsonObject> UGitNexusBlueprintAnalyzerCommandlet::BuildChainNodeJson(
+	const UEdGraph* Graph, const UEdGraphNode* Node, int32 Depth,
+	const FString& TraversedFromPinName, const FGuid& TraversedFromNodeId) const
 {
 	TSharedPtr<FJsonObject> Object = MakeShared<FJsonObject>();
 	Object->SetStringField(TEXT("node_id"), Node ? Node->NodeGuid.ToString(EGuidFormats::DigitsWithHyphens) : FString());
@@ -427,7 +445,172 @@ TSharedPtr<FJsonObject> UGitNexusBlueprintAnalyzerCommandlet::BuildChainNodeJson
 	Object->SetStringField(TEXT("node_kind"), Node ? Node->GetClass()->GetName() : FString());
 	Object->SetStringField(TEXT("node_title"), Node ? Node->GetNodeTitle(ENodeTitleType::ListView).ToString() : FString());
 	Object->SetNumberField(TEXT("depth"), Depth);
+
+	if (!TraversedFromPinName.IsEmpty())
+	{
+		Object->SetStringField(TEXT("traversed_from_pin"), TraversedFromPinName);
+	}
+	if (TraversedFromNodeId.IsValid())
+	{
+		Object->SetStringField(TEXT("traversed_from_node"), TraversedFromNodeId.ToString(EGuidFormats::DigitsWithHyphens));
+	}
+
+	if (Node)
+	{
+		AnnotateNodeMetadata(Object, Node);
+		Object->SetObjectField(TEXT("pins"), BuildPinsJson(Node));
+		AnnotateNodeDetails(Object, Node);
+	}
+
 	return Object;
+}
+
+TSharedPtr<FJsonObject> UGitNexusBlueprintAnalyzerCommandlet::BuildPinJson(const UEdGraphPin* Pin) const
+{
+	TSharedPtr<FJsonObject> PinObj = MakeShared<FJsonObject>();
+	if (!Pin)
+	{
+		return PinObj;
+	}
+
+	PinObj->SetStringField(TEXT("name"), Pin->PinName.ToString());
+	PinObj->SetStringField(TEXT("direction"), Pin->Direction == EGPD_Input ? TEXT("input") : TEXT("output"));
+	PinObj->SetStringField(TEXT("type"), Pin->PinType.PinCategory.ToString());
+
+	if (Pin->PinType.PinSubCategoryObject.IsValid())
+	{
+		PinObj->SetStringField(TEXT("sub_type"), Pin->PinType.PinSubCategoryObject->GetName());
+	}
+
+	if (!Pin->DefaultValue.IsEmpty())
+	{
+		PinObj->SetStringField(TEXT("default_value"), Pin->DefaultValue);
+	}
+	else if (Pin->DefaultObject)
+	{
+		PinObj->SetStringField(TEXT("default_value"), Pin->DefaultObject->GetPathName());
+	}
+
+	if (Pin->LinkedTo.Num() > 0)
+	{
+		TArray<TSharedPtr<FJsonValue>> ConnectedTo;
+		TArray<TSharedPtr<FJsonValue>> ConnectedToTitle;
+		for (const UEdGraphPin* LinkedPin : Pin->LinkedTo)
+		{
+			if (LinkedPin && LinkedPin->GetOwningNode())
+			{
+				ConnectedTo.Add(MakeShared<FJsonValueString>(
+					LinkedPin->GetOwningNode()->NodeGuid.ToString(EGuidFormats::DigitsWithHyphens)));
+				ConnectedToTitle.Add(MakeShared<FJsonValueString>(
+					LinkedPin->GetOwningNode()->GetNodeTitle(ENodeTitleType::ListView).ToString()));
+			}
+		}
+		PinObj->SetArrayField(TEXT("connected_to"), ConnectedTo);
+		PinObj->SetArrayField(TEXT("connected_to_title"), ConnectedToTitle);
+	}
+
+	return PinObj;
+}
+
+TSharedPtr<FJsonObject> UGitNexusBlueprintAnalyzerCommandlet::BuildPinsJson(const UEdGraphNode* Node) const
+{
+	TSharedPtr<FJsonObject> PinsObj = MakeShared<FJsonObject>();
+	if (!Node)
+	{
+		return PinsObj;
+	}
+
+	TArray<TSharedPtr<FJsonValue>> ExecPins;
+	TArray<TSharedPtr<FJsonValue>> DataPins;
+
+	for (const UEdGraphPin* Pin : Node->Pins)
+	{
+		if (!Pin)
+		{
+			continue;
+		}
+
+		TSharedPtr<FJsonObject> PinJson = BuildPinJson(Pin);
+		if (Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_Exec)
+		{
+			ExecPins.Add(MakeShared<FJsonValueObject>(PinJson));
+		}
+		else
+		{
+			DataPins.Add(MakeShared<FJsonValueObject>(PinJson));
+		}
+	}
+
+	PinsObj->SetArrayField(TEXT("exec_pins"), ExecPins);
+	PinsObj->SetArrayField(TEXT("data_pins"), DataPins);
+	return PinsObj;
+}
+
+void UGitNexusBlueprintAnalyzerCommandlet::AnnotateNodeMetadata(TSharedPtr<FJsonObject>& NodeObj, const UEdGraphNode* Node) const
+{
+	if (!Node)
+	{
+		return;
+	}
+
+	NodeObj->SetBoolField(TEXT("is_enabled"), Node->IsNodeEnabled());
+
+	if (!Node->NodeComment.IsEmpty())
+	{
+		NodeObj->SetStringField(TEXT("comment"), Node->NodeComment);
+	}
+}
+
+void UGitNexusBlueprintAnalyzerCommandlet::AnnotateNodeDetails(TSharedPtr<FJsonObject>& NodeObj, const UEdGraphNode* Node) const
+{
+	if (!Node)
+	{
+		return;
+	}
+
+	TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+	bool bHasDetails = false;
+
+	if (const UK2Node_CallFunction* CallNode = Cast<UK2Node_CallFunction>(Node))
+	{
+		Details->SetBoolField(TEXT("is_pure"), CallNode->IsNodePure());
+		if (const UFunction* TargetFunction = CallNode->GetTargetFunction())
+		{
+			Details->SetStringField(TEXT("function_name"), TargetFunction->GetName());
+			if (const UClass* OwnerClass = TargetFunction->GetOwnerClass())
+			{
+				Details->SetStringField(TEXT("target_class"), OwnerClass->GetName());
+			}
+		}
+		bHasDetails = true;
+	}
+	else if (const UK2Node_VariableGet* GetNode = Cast<UK2Node_VariableGet>(Node))
+	{
+		Details->SetStringField(TEXT("variable_name"), GetNode->GetVarName().ToString());
+		Details->SetStringField(TEXT("node_role"), TEXT("variable_get"));
+		bHasDetails = true;
+	}
+	else if (const UK2Node_VariableSet* SetNode = Cast<UK2Node_VariableSet>(Node))
+	{
+		Details->SetStringField(TEXT("variable_name"), SetNode->GetVarName().ToString());
+		Details->SetStringField(TEXT("node_role"), TEXT("variable_set"));
+		bHasDetails = true;
+	}
+	else if (Cast<UK2Node_IfThenElse>(Node))
+	{
+		Details->SetStringField(TEXT("branch_type"), TEXT("if_then_else"));
+		bHasDetails = true;
+	}
+	else if (Cast<UK2Node_Switch>(Node))
+	{
+		Details->SetStringField(TEXT("branch_type"), TEXT("switch"));
+		bHasDetails = true;
+	}
+
+	if (bHasDetails)
+	{
+		NodeObj->SetObjectField(TEXT("details"), Details);
+	}
 }
 
 UEdGraphNode* UGitNexusBlueprintAnalyzerCommandlet::FindNodeByGuid(UBlueprint* Blueprint, const FString& NodeGuid) const

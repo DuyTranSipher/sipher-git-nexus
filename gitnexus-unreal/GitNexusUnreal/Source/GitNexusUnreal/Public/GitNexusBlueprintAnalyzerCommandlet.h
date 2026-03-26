@@ -6,6 +6,7 @@
 class UBlueprint;
 class UEdGraph;
 class UEdGraphNode;
+class UEdGraphPin;
 
 UCLASS()
 class GITNEXUSUNREAL_API UGitNexusBlueprintAnalyzerCommandlet : public UCommandlet
@@ -41,6 +42,13 @@ private:
 	void CollectBlueprintGraphs(UBlueprint* Blueprint, TArray<UEdGraph*>& OutGraphs) const;
 	bool IsTargetFunctionNode(const UEdGraphNode* Node, const FString& TargetSymbolKey, const FString& TargetClassName, const FString& TargetFunctionName) const;
 	TSharedPtr<FJsonObject> BuildReferenceJson(UBlueprint* Blueprint, const UEdGraph* Graph, const UEdGraphNode* Node) const;
-	TSharedPtr<FJsonObject> BuildChainNodeJson(const UEdGraph* Graph, const UEdGraphNode* Node, int32 Depth) const;
+	TSharedPtr<FJsonObject> BuildChainNodeJson(
+		const UEdGraph* Graph, const UEdGraphNode* Node, int32 Depth,
+		const FString& TraversedFromPinName = FString(),
+		const FGuid& TraversedFromNodeId = FGuid()) const;
+	TSharedPtr<FJsonObject> BuildPinJson(const UEdGraphPin* Pin) const;
+	TSharedPtr<FJsonObject> BuildPinsJson(const UEdGraphNode* Node) const;
+	void AnnotateNodeMetadata(TSharedPtr<FJsonObject>& NodeObj, const UEdGraphNode* Node) const;
+	void AnnotateNodeDetails(TSharedPtr<FJsonObject>& NodeObj, const UEdGraphNode* Node) const;
 	UEdGraphNode* FindNodeByGuid(UBlueprint* Blueprint, const FString& NodeGuid) const;
 };

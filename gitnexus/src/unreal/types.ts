@@ -59,12 +59,49 @@ export interface UnrealConfirmedReference {
   source: 'editor_confirmed';
 }
 
+export interface UnrealChainNodePin {
+  name: string;
+  direction: 'input' | 'output';
+  type: string;
+  sub_type?: string;
+  default_value?: string;
+  connected_to?: string[];
+  connected_to_title?: string[];
+}
+
+export interface UnrealChainNodePins {
+  exec_pins: UnrealChainNodePin[];
+  data_pins: UnrealChainNodePin[];
+}
+
+export interface UnrealChainNodeDetails {
+  // UK2Node_CallFunction
+  is_pure?: boolean;
+  target_class?: string;
+  function_name?: string;
+  // UK2Node_VariableGet / UK2Node_VariableSet
+  variable_name?: string;
+  node_role?: 'variable_get' | 'variable_set';
+  // UK2Node_IfThenElse / UK2Node_Switch
+  branch_type?: 'if_then_else' | 'switch';
+}
+
 export interface UnrealChainNode {
   node_id: string;
   graph_name?: string;
   node_kind: string;
   node_title?: string;
   depth: number;
+  // Phase 2: node metadata
+  is_enabled?: boolean;
+  comment?: string;
+  // Phase 3: BFS traversal context
+  traversed_from_pin?: string;
+  traversed_from_node?: string;
+  // Phase 1: pin data
+  pins?: UnrealChainNodePins;
+  // Phase 2: type-specific details
+  details?: UnrealChainNodeDetails;
 }
 
 export interface SyncUnrealAssetManifestResult {

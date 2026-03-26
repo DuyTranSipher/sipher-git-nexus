@@ -5,7 +5,7 @@ param(
 
     [string]$ProjectFile,
 
-    [string]$PluginSource = (Join-Path $PSScriptRoot '..\..\gitnexus-unreal\GitNexusUnreal'),
+    [string]$PluginSource = (Join-Path $PSScriptRoot '..\vendor\GitNexusUnreal'),
 
     [string]$EditorCmd,
 

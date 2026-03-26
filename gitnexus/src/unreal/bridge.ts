@@ -56,6 +56,23 @@ async function runCommand(
   });
 }
 
+async function readUELogErrors(config: UnrealConfig): Promise<string> {
+  try {
+    const projectDir = path.dirname(config.project_path);
+    const projectName = path.basename(config.project_path, '.uproject');
+    const logPath = path.join(projectDir, 'Saved', 'Logs', `${projectName}.log`);
+    const content = await fs.readFile(logPath, 'utf-8');
+    const lines = content.split(/\r?\n/);
+    const errorLines = lines.filter(l =>
+      /\bError\b/i.test(l) && !/^LogWindows.*Failed to get driver/i.test(l.replace(/^\[.*?\]\[\s*\d+\]/, ''))
+    );
+    if (errorLines.length === 0) return '';
+    return 'UE Log errors:\n' + errorLines.slice(-10).join('\n');
+  } catch {
+    return '';
+  }
+}
+
 async function readOutputJson<T>(outputPath: string, stdout: string): Promise<T> {
   try {
     const raw = await fs.readFile(outputPath, 'utf-8');
@@ -84,10 +101,17 @@ export async function syncUnrealAssetManifest(
       generated_at: response.manifest.generated_at,
       warnings: response.warnings || [],
     };
-  } catch (error) {
+  } catch (error: any) {
+    const stderr = error?.stderr ? String(error.stderr).trim() : '';
+    const stdout = error?.stdout ? String(error.stdout).trim() : '';
+    const msg = error instanceof Error ? error.message : String(error);
+    const ueLog = await readUELogErrors(config);
+    const details = [msg, stderr && `stderr: ${stderr}`, stdout && `stdout: ${stdout}`, ueLog]
+      .filter(Boolean)
+      .join('\n');
     return {
       status: 'error',
-      error: error instanceof Error ? error.message : String(error),
+      error: details,
     };
   }
 }

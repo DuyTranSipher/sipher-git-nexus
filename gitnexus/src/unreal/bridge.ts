@@ -9,9 +9,9 @@ import type {
   FindNativeBlueprintReferencesResult,
   NativeFunctionTarget,
   SyncUnrealAssetManifestResult,
+  UnrealAssetManifest,
   UnrealAnalyzerExpandChainResponse,
   UnrealAnalyzerFindRefsResponse,
-  UnrealAnalyzerSyncResponse,
   UnrealBlueprintCandidate,
   UnrealConfig,
   UnrealStoragePaths,
@@ -92,14 +92,14 @@ export async function syncUnrealAssetManifest(
 
   try {
     const { stdout } = await runCommand(config, 'SyncAssets', args);
-    const response = await readOutputJson<UnrealAnalyzerSyncResponse>(outputPath, stdout);
-    const manifestPath = await saveUnrealAssetManifest(storagePath, response.manifest);
+    const manifest = await readOutputJson<UnrealAssetManifest>(outputPath, stdout);
+    const manifestPath = await saveUnrealAssetManifest(storagePath, manifest);
     return {
       status: 'success',
       manifest_path: manifestPath,
-      asset_count: response.manifest.assets.length,
-      generated_at: response.manifest.generated_at,
-      warnings: response.warnings || [],
+      asset_count: manifest.assets.length,
+      generated_at: manifest.generated_at,
+      warnings: [],
     };
   } catch (error: any) {
     const stderr = error?.stderr ? String(error.stderr).trim() : '';

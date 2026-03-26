@@ -71,6 +71,7 @@ export interface WikiMeta {
   model: string;
   moduleFiles: Record<string, string[]>;
   moduleTree: ModuleTreeNode[];
+  failedModules?: string[];
 }
 
 export interface ModuleTreeNode {
@@ -205,6 +206,19 @@ export class WikiGenerator {
 
     // Up-to-date check (skip if --force)
     if (!forceMode && existingMeta && existingMeta.fromCommit === currentCommit) {
+      // If previous run had failed modules, retry them instead of skipping
+      if (existingMeta.failedModules?.length) {
+        this.onProgress('init', 2, 'Retrying previously failed modules...');
+        await initWikiDb(this.lbugPath);
+        let retryResult: { pagesGenerated: number; mode: 'full' | 'incremental' | 'up-to-date'; failedModules: string[] };
+        try {
+          retryResult = await this.retryFailedModules(existingMeta, currentCommit);
+        } finally {
+          await closeWikiDb();
+        }
+        await this.ensureHTMLViewer();
+        return retryResult;
+      }
       // Still regenerate the HTML viewer in case it's missing
       await this.ensureHTMLViewer();
       return { pagesGenerated: 0, mode: 'up-to-date', failedModules: [] };
@@ -341,7 +355,7 @@ export class WikiGenerator {
     await this.generateOverview(moduleTree);
     pagesGenerated++;
 
-    // Save metadata
+    // Save metadata (include failed modules so retry can find them)
     this.onProgress('finalize', 95, 'Saving metadata...');
     const moduleFiles = this.extractModuleFiles(moduleTree);
     await this.saveModuleTree(moduleTree);
@@ -351,9 +365,94 @@ export class WikiGenerator {
       model: this.llmConfig.model,
       moduleFiles,
       moduleTree,
+      failedModules: this.failedModules.length > 0 ? [...this.failedModules] : undefined,
     });
 
     this.onProgress('done', 100, 'Wiki generation complete');
+    return { pagesGenerated, mode: 'full', failedModules: [...this.failedModules] };
+  }
+
+  // ─── Retry Failed Modules ──────────────────────────────────────────
+
+  /**
+   * Retry only the modules that failed in a previous run.
+   * Finds them in the saved module tree and regenerates their pages.
+   */
+  private async retryFailedModules(
+    existingMeta: WikiMeta,
+    currentCommit: string,
+  ): Promise<{ pagesGenerated: number; mode: 'full'; failedModules: string[] }> {
+    const failedNames = new Set(existingMeta.failedModules ?? []);
+    const moduleTree = existingMeta.moduleTree;
+    const { leaves, parents } = this.flattenModuleTree(moduleTree);
+
+    const failedLeaves = leaves.filter(n => failedNames.has(n.name));
+    const failedParents = parents.filter(n => failedNames.has(n.name));
+    const totalRetries = failedLeaves.length + failedParents.length;
+    let processed = 0;
+    let pagesGenerated = 0;
+
+    const reportProgress = (moduleName?: string) => {
+      processed++;
+      const percent = 10 + Math.round((processed / totalRetries) * 75);
+      const detail = moduleName
+        ? `Retry ${processed}/${totalRetries} — ${moduleName}`
+        : `Retry ${processed}/${totalRetries}`;
+      this.onProgress('retry', percent, detail);
+    };
+
+    // Delete existing failed pages so they get regenerated
+    for (const name of failedNames) {
+      const node = [...leaves, ...parents].find(n => n.name === name);
+      if (node) {
+        try { await fs.unlink(path.join(this.wikiDir, `${node.slug}.md`)); } catch {}
+      }
+    }
+
+    // Retry leaf modules in parallel
+    pagesGenerated += await this.runParallel(failedLeaves, async (node) => {
+      try {
+        await this.generateLeafPage(node);
+        reportProgress(node.name);
+        return 1;
+      } catch {
+        this.failedModules.push(node.name);
+        reportProgress(`Failed: ${node.name}`);
+        return 0;
+      }
+    });
+
+    // Retry parent modules sequentially
+    for (const node of failedParents) {
+      try {
+        await this.generateParentPage(node);
+        pagesGenerated++;
+        reportProgress(node.name);
+      } catch {
+        this.failedModules.push(node.name);
+        reportProgress(`Failed: ${node.name}`);
+      }
+    }
+
+    // Regenerate overview if any pages were recovered
+    if (pagesGenerated > 0) {
+      this.onProgress('overview', 88, 'Regenerating overview page...');
+      await this.generateOverview(moduleTree);
+    }
+
+    // Update metadata
+    this.onProgress('finalize', 95, 'Saving metadata...');
+    const moduleFiles = this.extractModuleFiles(moduleTree);
+    await this.saveWikiMeta({
+      fromCommit: currentCommit,
+      generatedAt: new Date().toISOString(),
+      model: this.llmConfig.model,
+      moduleFiles,
+      moduleTree,
+      failedModules: this.failedModules.length > 0 ? [...this.failedModules] : undefined,
+    });
+
+    this.onProgress('done', 100, 'Retry complete');
     return { pagesGenerated, mode: 'full', failedModules: [...this.failedModules] };
   }
 
@@ -826,6 +925,7 @@ export class WikiGenerator {
       fromCommit: currentCommit,
       generatedAt: new Date().toISOString(),
       model: this.llmConfig.model,
+      failedModules: this.failedModules.length > 0 ? [...this.failedModules] : undefined,
     });
 
     this.onProgress('done', 100, 'Incremental update complete');

@@ -524,11 +524,10 @@ export class LocalBackend {
     manifestPath: string;
     manifestRefreshed: boolean;
   } | { error: string }> {
-    const config = await loadUnrealConfig(repo.storagePath);
+    const config = await loadUnrealConfig(repo.storagePath, repo.repoPath);
     if (!config) {
-      const paths = getUnrealStoragePaths(repo.storagePath);
       return {
-        error: `Unreal analyzer is not configured for this repo. Create ${paths.config_path} with editor_cmd and project_path.`,
+        error: `Unreal analyzer is not configured for this repo. Create .gitnexus-unreal.json in the project root (or .gitnexus/unreal/config.json) with editor_cmd and project_path.`,
       };
     }
 
@@ -559,11 +558,10 @@ export class LocalBackend {
   }
 
   private async syncUnrealAssetManifestTool(repo: RepoHandle, params?: { deep?: boolean }): Promise<any> {
-    const config = await loadUnrealConfig(repo.storagePath);
+    const config = await loadUnrealConfig(repo.storagePath, repo.repoPath);
     if (!config) {
-      const paths = getUnrealStoragePaths(repo.storagePath);
       return {
-        error: `Unreal analyzer is not configured for this repo. Create ${paths.config_path} with editor_cmd and project_path.`,
+        error: `Unreal analyzer is not configured for this repo. Create .gitnexus-unreal.json in the project root (or .gitnexus/unreal/config.json) with editor_cmd and project_path.`,
       };
     }
 

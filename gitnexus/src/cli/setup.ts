@@ -491,7 +491,7 @@ async function setupUnreal(options: UnrealSetupOptions, result: SetupResult): Pr
 
   // Check existing installation
   const pluginExists = await dirExists(pluginDest);
-  const configExists = await fileExists(configPath);
+  const configExists = await fileExists(configPath) || await fileExists(path.join(projectRoot, '.gitnexus-unreal.json'));
 
   if ((pluginExists || configExists) && !options.force) {
     result.errors.push(
@@ -518,23 +518,31 @@ async function setupUnreal(options: UnrealSetupOptions, result: SetupResult): Pr
     return;
   }
 
-  // Write config
+  // Write config — split into shared (project root, committable) and local (gitignored)
+  const sharedConfigPath = path.join(projectRoot, '.gitnexus-unreal.json');
   try {
-    await fs.mkdir(unrealDir, { recursive: true });
-    const config: UnrealConfig = {
-      editor_cmd: editorCmd.replace(/\\/g, '/'),
-      project_path: uprojectPath.replace(/\\/g, '/'),
+    // Shared config: team-wide settings (committable to git)
+    const sharedConfig = {
       commandlet: 'GitNexusBlueprintAnalyzer',
       timeout_ms: 300000,
     };
-    await fs.writeFile(configPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+    await fs.writeFile(sharedConfigPath, JSON.stringify(sharedConfig, null, 2) + '\n', 'utf-8');
+
+    // Local config: machine-specific paths (gitignored in .gitnexus/)
+    await fs.mkdir(unrealDir, { recursive: true });
+    const localConfig = {
+      editor_cmd: editorCmd.replace(/\\/g, '/'),
+      project_path: uprojectPath.replace(/\\/g, '/'),
+    };
+    await fs.writeFile(configPath, JSON.stringify(localConfig, null, 2) + '\n', 'utf-8');
   } catch (err: any) {
     result.errors.push(`Unreal: failed to write config: ${err.message}`);
     return;
   }
 
   result.configured.push(`Unreal plugin → ${pluginDest}`);
-  result.configured.push(`Unreal config → ${configPath}`);
+  result.configured.push(`Unreal config (shared) → ${sharedConfigPath}`);
+  result.configured.push(`Unreal config (local) → ${configPath}`);
   console.log(`    Editor: ${editorCmd}`);
 }
 

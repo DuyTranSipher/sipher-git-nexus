@@ -24,22 +24,41 @@ export async function ensureUnrealStorage(storagePath: string): Promise<UnrealSt
   return paths;
 }
 
-export async function loadUnrealConfig(storagePath: string): Promise<UnrealConfig | null> {
+/**
+ * Load Unreal config by merging two layers:
+ * 1. Project root `.gitnexus-unreal.json` (committable, team-shared)
+ * 2. Local `.gitnexus/unreal/config.json` (gitignored, machine-specific overrides)
+ *
+ * Local values override shared values. Either file alone is sufficient.
+ */
+export async function loadUnrealConfig(storagePath: string, repoPath?: string): Promise<UnrealConfig | null> {
+  let shared: Partial<UnrealConfig> = {};
+  let local: Partial<UnrealConfig> = {};
+
+  // Layer 1: project-root shared config
+  if (repoPath) {
+    try {
+      const raw = await fs.readFile(path.join(repoPath, '.gitnexus-unreal.json'), 'utf-8');
+      shared = JSON.parse(raw) as Partial<UnrealConfig>;
+    } catch { /* not present */ }
+  }
+
+  // Layer 2: local storage config (overrides shared)
   try {
     const paths = getUnrealStoragePaths(storagePath);
     const raw = await fs.readFile(paths.config_path, 'utf-8');
-    const parsed = JSON.parse(raw) as UnrealConfig;
-    if (!parsed.editor_cmd || !parsed.project_path) {
-      return null;
-    }
-    return {
-      commandlet: 'GitNexusBlueprintAnalyzer',
-      timeout_ms: 300000,
-      ...parsed,
-    };
-  } catch {
+    local = JSON.parse(raw) as Partial<UnrealConfig>;
+  } catch { /* not present */ }
+
+  const merged = { ...shared, ...local };
+  if (!merged.editor_cmd || !merged.project_path) {
     return null;
   }
+  return {
+    commandlet: 'GitNexusBlueprintAnalyzer',
+    timeout_ms: 300000,
+    ...merged,
+  } as UnrealConfig;
 }
 
 export async function loadUnrealAssetManifest(storagePath: string): Promise<UnrealAssetManifest | null> {

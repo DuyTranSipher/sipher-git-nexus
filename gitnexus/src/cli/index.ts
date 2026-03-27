@@ -156,6 +156,16 @@ program
   .option('--max-results <n>', 'Maximum Blueprint assets to return')
   .action(createLazyAction(() => import('./tool.js'), 'findBlueprintsDerivedFromNativeClassCommand'));
 
+// ─── Info Commands ──────────────────────────────────────────────────
+
+program
+  .command('changelog')
+  .alias('changelogs')
+  .description('Show release notes and version history')
+  .option('-v, --version <version>', 'Show notes for a specific version (e.g. 1.3.0)')
+  .option('-a, --all', 'Show all versions')
+  .action(createLazyAction(() => import('./changelog.js'), 'changelogCommand'));
+
 // ─── Eval Server (persistent daemon for SWE-bench) ─────────────────
 
 program

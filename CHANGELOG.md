@@ -2,6 +2,45 @@
 
 All notable changes to GitNexus will be documented in this file.
 
+## [1.3.3] - 2026-03-27
+
+### Fixed
+
+- **Unreal setup --force preserves config**: Re-running `gitnexus setup --unreal --force` now merges defaults under existing config values instead of overwriting user customizations (include_paths, exclude_paths, etc.)
+
+## [1.3.2] - 2026-03-27
+
+### Added
+
+- **Shared Unreal configuration**: New `.gitnexus-unreal.json` at project root for team-shared settings (committable to git), while machine-specific settings (editor_cmd, project_path) stay in `.gitnexus/unreal/config.json` (gitignored)
+
+## [1.3.1] - 2026-03-27
+
+### Fixed
+
+- **Auto-convert filesystem paths to Unreal package paths**: `include_paths` and `exclude_paths` in Unreal config now accept Windows filesystem paths (e.g., `Content/Characters/`) and automatically convert them to Unreal virtual paths (`/Game/Characters/`)
+
+## [1.3.0] - 2026-03-27
+
+### Added
+
+- **Metadata-only Unreal sync mode**: Default sync now scans Blueprint asset metadata (parent class, dependencies) without loading full assets — fast and crash-resilient
+- **`--deep` flag for full sync**: `gitnexus unreal-sync --deep` loads Blueprint assets fully for pin-level and node-level data (original behavior)
+- **`include_paths` filtering**: Restrict Unreal sync to specific content directories via config, reducing scan scope on large projects
+- **`.gitnexusignore` support for Unreal sync**: Ignore patterns are converted to Unreal package prefixes and passed to the C++ commandlet for asset filtering
+
+## [1.2.2] - 2026-03-26
+
+### Added
+
+- **Spinner UX for Unreal sync**: Progress spinner during commandlet execution with elapsed time
+- **CWD repo resolution**: `gitnexus unreal-sync` now auto-detects the repository when run from within a project directory
+- **Resilient error handling**: Improved error messages with UE log tailing on commandlet failures
+
+### Fixed
+
+- **Engine auto-detection fallback**: Added `LauncherInstalled.dat` lookup for Epic Games Launcher engine installations, fixing auto-detection on machines where the registry key is absent
+
 ## [1.2.0] - 2026-03-26
 
 ### Added

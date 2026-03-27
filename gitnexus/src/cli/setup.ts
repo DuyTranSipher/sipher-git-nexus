@@ -118,13 +118,16 @@ async function setupClaudeCode(result: SetupResult): Promise<void> {
     return;
   }
 
-  // Claude Code uses a JSON settings file at ~/.claude.json or claude mcp add
-  console.log('');
-  console.log('  Claude Code detected. Run this command to add GitNexus MCP:');
-  console.log('');
-  console.log('    claude mcp add gitnexus -- npx -y gitnexus mcp');
-  console.log('');
-  result.configured.push('Claude Code (MCP manual step printed)');
+  // Write MCP config to ~/.claude/.mcp.json (global MCP config for Claude Code)
+  const mcpPath = path.join(claudeDir, '.mcp.json');
+  try {
+    const existing = await readJsonFile(mcpPath);
+    const updated = mergeMcpConfig(existing);
+    await writeJsonFile(mcpPath, updated);
+    result.configured.push('Claude Code');
+  } catch (err: any) {
+    result.errors.push(`Claude Code: ${err.message}`);
+  }
 }
 
 /**

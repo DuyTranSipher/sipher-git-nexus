@@ -99,6 +99,34 @@ interface FilterPrefixes {
 }
 
 /**
+ * Normalize a path to an Unreal package path prefix.
+ * Accepts both filesystem paths (Content/X, Plugins/X) and Unreal paths (/Game/X).
+ */
+function toUnrealPrefix(p: string): string {
+  // Strip trailing slashes
+  const cleaned = p.replace(/\/+$/, '');
+  // Already an Unreal package path
+  if (cleaned.startsWith('/')) return cleaned;
+  // Content/X → /Game/X
+  if (cleaned.startsWith('Content/') || cleaned.startsWith('Content\\')) {
+    return '/Game/' + cleaned.slice('Content/'.length);
+  }
+  // Plugins/X/Content/Y → /X/Y  or  Plugins/X → /X
+  if (cleaned.startsWith('Plugins/') || cleaned.startsWith('Plugins\\')) {
+    const rest = cleaned.slice('Plugins/'.length);
+    const contentIdx = rest.indexOf('/Content/');
+    if (contentIdx >= 0) {
+      const pluginName = rest.slice(0, contentIdx);
+      const inner = rest.slice(contentIdx + '/Content/'.length);
+      return `/${pluginName}/${inner}`;
+    }
+    return '/' + rest;
+  }
+  // Fallback: assume it's a /Game/ relative path
+  return '/Game/' + cleaned;
+}
+
+/**
  * Build include/exclude prefix filters for the Unreal commandlet.
  * Merges config `include_paths`/`exclude_paths` with .gitnexusignore patterns,
  * mapping filesystem patterns to Unreal asset path prefixes.
@@ -110,17 +138,17 @@ async function buildFilterPrefixes(
   const include_prefixes: string[] = [];
   const exclude_prefixes: string[] = [];
 
-  // Add explicit include_paths (whitelist) from unreal config
+  // Add explicit include_paths (whitelist) — auto-convert filesystem paths
   if (config.include_paths && Array.isArray(config.include_paths)) {
     for (const p of config.include_paths) {
-      include_prefixes.push(p);
+      include_prefixes.push(toUnrealPrefix(p));
     }
   }
 
-  // Add explicit exclude_paths from unreal config
+  // Add explicit exclude_paths — auto-convert filesystem paths
   if (config.exclude_paths && Array.isArray(config.exclude_paths)) {
     for (const p of config.exclude_paths) {
-      exclude_prefixes.push(p);
+      exclude_prefixes.push(toUnrealPrefix(p));
     }
   }
 

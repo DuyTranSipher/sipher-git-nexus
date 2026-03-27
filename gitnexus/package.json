@@ -1,6 +1,6 @@
 {
   "name": "@duytransipher/gitnexus",
-  "version": "1.3.4",
+  "version": "1.3.5",
   "description": "Sipher-maintained fork of GitNexus for graph-powered code intelligence via MCP and CLI.",
   "author": "DuyTranSipher",
   "license": "PolyForm-Noncommercial-1.0.0",
@@ -34,7 +34,8 @@
     "hooks",
     "scripts",
     "skills",
-    "vendor"
+    "vendor",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsc",

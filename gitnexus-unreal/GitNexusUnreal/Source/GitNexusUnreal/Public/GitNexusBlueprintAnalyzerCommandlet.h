@@ -19,7 +19,12 @@ public:
 	virtual int32 Main(const FString& Params) override;
 
 private:
-	int32 RunSyncAssets(const FString& OutputJsonPath);
+	// ── SyncAssets ────────────────────────────────────────────────────────
+	int32 RunSyncAssets(const FString& OutputJsonPath, const FString& FilterJsonPath, bool bDeepMode);
+	int32 RunSyncAssetsMetadata(const FString& OutputJsonPath, const TArray<FAssetData>& Assets);
+	int32 RunSyncAssetsDeep(const FString& OutputJsonPath, const TArray<FAssetData>& Assets);
+
+	// ── Other operations ─────────────────────────────────────────────────
 	int32 RunFindNativeBlueprintReferences(
 		const FString& OutputJsonPath,
 		const FString& CandidatesJsonPath,
@@ -35,9 +40,18 @@ private:
 		int32 MaxDepth
 	);
 
+	// ── Helpers ──────────────────────────────────────────────────────────
+
+	struct FFilterPrefixes
+	{
+		TArray<FString> IncludePrefixes;
+		TArray<FString> ExcludePrefixes;
+	};
+
 	bool WriteJsonToFile(const FString& OutputJsonPath, const TSharedPtr<FJsonObject>& RootObject) const;
 	TArray<FString> LoadCandidateAssets(const FString& CandidatesJsonPath) const;
-	TArray<FAssetData> GetAllBlueprintAssets() const;
+	FFilterPrefixes LoadFilterPrefixes(const FString& FilterJsonPath) const;
+	TArray<FAssetData> GetAllBlueprintAssets(const FFilterPrefixes& Filters = FFilterPrefixes()) const;
 	UBlueprint* LoadBlueprintFromAssetPath(const FString& AssetPath) const;
 	void CollectBlueprintGraphs(UBlueprint* Blueprint, TArray<UEdGraph*>& OutGraphs) const;
 	bool IsTargetFunctionNode(const UEdGraphNode* Node, const FString& TargetSymbolKey, const FString& TargetClassName, const FString& TargetFunctionName) const;

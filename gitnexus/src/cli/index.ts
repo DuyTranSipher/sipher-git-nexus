@@ -126,6 +126,7 @@ program
   .command('unreal-sync')
   .description('Refresh the Unreal Blueprint asset manifest for the current indexed repo')
   .option('-r, --repo <name>', 'Target repository')
+  .option('--deep', 'Deep mode: load Blueprints fully for native_function_refs (slower, higher memory)')
   .action(createLazyAction(() => import('./tool.js'), 'syncUnrealAssetManifestCommand'));
 
 program

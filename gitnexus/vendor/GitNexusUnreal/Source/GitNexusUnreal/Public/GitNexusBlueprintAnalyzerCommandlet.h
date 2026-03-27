@@ -6,6 +6,7 @@
 class UBlueprint;
 class UEdGraph;
 class UEdGraphNode;
+class UEdGraphPin;
 
 UCLASS()
 class GITNEXUSUNREAL_API UGitNexusBlueprintAnalyzerCommandlet : public UCommandlet
@@ -18,7 +19,12 @@ public:
 	virtual int32 Main(const FString& Params) override;
 
 private:
-	int32 RunSyncAssets(const FString& OutputJsonPath);
+	// ── SyncAssets ────────────────────────────────────────────────────────
+	int32 RunSyncAssets(const FString& OutputJsonPath, const FString& FilterJsonPath, bool bDeepMode);
+	int32 RunSyncAssetsMetadata(const FString& OutputJsonPath, const TArray<FAssetData>& Assets);
+	int32 RunSyncAssetsDeep(const FString& OutputJsonPath, const TArray<FAssetData>& Assets);
+
+	// ── Other operations ─────────────────────────────────────────────────
 	int32 RunFindNativeBlueprintReferences(
 		const FString& OutputJsonPath,
 		const FString& CandidatesJsonPath,
@@ -34,13 +40,29 @@ private:
 		int32 MaxDepth
 	);
 
+	// ── Helpers ──────────────────────────────────────────────────────────
+
+	struct FFilterPrefixes
+	{
+		TArray<FString> IncludePrefixes;
+		TArray<FString> ExcludePrefixes;
+	};
+
 	bool WriteJsonToFile(const FString& OutputJsonPath, const TSharedPtr<FJsonObject>& RootObject) const;
 	TArray<FString> LoadCandidateAssets(const FString& CandidatesJsonPath) const;
-	TArray<FAssetData> GetAllBlueprintAssets() const;
+	FFilterPrefixes LoadFilterPrefixes(const FString& FilterJsonPath) const;
+	TArray<FAssetData> GetAllBlueprintAssets(const FFilterPrefixes& Filters = FFilterPrefixes()) const;
 	UBlueprint* LoadBlueprintFromAssetPath(const FString& AssetPath) const;
 	void CollectBlueprintGraphs(UBlueprint* Blueprint, TArray<UEdGraph*>& OutGraphs) const;
 	bool IsTargetFunctionNode(const UEdGraphNode* Node, const FString& TargetSymbolKey, const FString& TargetClassName, const FString& TargetFunctionName) const;
 	TSharedPtr<FJsonObject> BuildReferenceJson(UBlueprint* Blueprint, const UEdGraph* Graph, const UEdGraphNode* Node) const;
-	TSharedPtr<FJsonObject> BuildChainNodeJson(const UEdGraph* Graph, const UEdGraphNode* Node, int32 Depth) const;
+	TSharedPtr<FJsonObject> BuildChainNodeJson(
+		const UEdGraph* Graph, const UEdGraphNode* Node, int32 Depth,
+		const FString& TraversedFromPinName = FString(),
+		const FGuid& TraversedFromNodeId = FGuid()) const;
+	TSharedPtr<FJsonObject> BuildPinJson(const UEdGraphPin* Pin) const;
+	TSharedPtr<FJsonObject> BuildPinsJson(const UEdGraphNode* Node) const;
+	void AnnotateNodeMetadata(TSharedPtr<FJsonObject>& NodeObj, const UEdGraphNode* Node) const;
+	void AnnotateNodeDetails(TSharedPtr<FJsonObject>& NodeObj, const UEdGraphNode* Node) const;
 	UEdGraphNode* FindNodeByGuid(UBlueprint* Blueprint, const FString& NodeGuid) const;
 };

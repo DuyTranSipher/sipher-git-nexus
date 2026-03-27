@@ -21,6 +21,10 @@ export interface UnrealConfig {
   timeout_ms?: number;
   working_directory?: string;
   extra_args?: string[];
+  /** Unreal package path prefixes to exclude from sync (e.g., "/Game/ThirdParty", "/SomePlugin") */
+  exclude_paths?: string[];
+  /** Unreal package path prefixes to include (whitelist). If set, ONLY assets under these prefixes are scanned. */
+  include_paths?: string[];
 }
 
 export interface UnrealStoragePaths {

@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { ensureUnrealStorage, saveUnrealAssetManifest } from './config.js';
+import { loadIgnoreRules } from '../config/ignore-service.js';
 import type {
   ExpandBlueprintChainResult,
   FindNativeBlueprintReferencesResult,
@@ -92,13 +93,93 @@ async function readOutputJson<T>(outputPath: string, stdout: string): Promise<T>
   }
 }
 
+interface FilterPrefixes {
+  include_prefixes: string[];
+  exclude_prefixes: string[];
+}
+
+/**
+ * Build include/exclude prefix filters for the Unreal commandlet.
+ * Merges config `include_paths`/`exclude_paths` with .gitnexusignore patterns,
+ * mapping filesystem patterns to Unreal asset path prefixes.
+ */
+async function buildFilterPrefixes(
+  repoPath: string | undefined,
+  config: UnrealConfig,
+): Promise<FilterPrefixes> {
+  const include_prefixes: string[] = [];
+  const exclude_prefixes: string[] = [];
+
+  // Add explicit include_paths (whitelist) from unreal config
+  if (config.include_paths && Array.isArray(config.include_paths)) {
+    for (const p of config.include_paths) {
+      include_prefixes.push(p);
+    }
+  }
+
+  // Add explicit exclude_paths from unreal config
+  if (config.exclude_paths && Array.isArray(config.exclude_paths)) {
+    for (const p of config.exclude_paths) {
+      exclude_prefixes.push(p);
+    }
+  }
+
+  // Derive exclude prefixes from .gitnexusignore patterns
+  if (repoPath) {
+    const ig = await loadIgnoreRules(repoPath);
+    if (ig) {
+      const projectDir = path.dirname(config.project_path);
+      try {
+        const contentDir = path.join(projectDir, 'Content');
+        const entries = await fs.readdir(contentDir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.isDirectory()) {
+            const relPath = `Content/${entry.name}`;
+            if (ig.ignores(relPath) || ig.ignores(relPath + '/')) {
+              exclude_prefixes.push(`/Game/${entry.name}`);
+            }
+          }
+        }
+      } catch { /* Content dir might not exist */ }
+
+      try {
+        const pluginsDir = path.join(projectDir, 'Plugins');
+        const entries = await fs.readdir(pluginsDir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.isDirectory()) {
+            const relPath = `Plugins/${entry.name}`;
+            if (ig.ignores(relPath) || ig.ignores(relPath + '/')) {
+              exclude_prefixes.push(`/${entry.name}`);
+            }
+          }
+        }
+      } catch { /* Plugins dir might not exist */ }
+    }
+  }
+
+  return { include_prefixes, exclude_prefixes };
+}
+
 export async function syncUnrealAssetManifest(
   storagePath: string,
   config: UnrealConfig,
+  repoPath?: string,
+  deep?: boolean,
 ): Promise<SyncUnrealAssetManifestResult> {
   const unrealPaths = await ensureUnrealStorage(storagePath);
   const { outputPath } = requestPaths(unrealPaths);
   const args = buildBaseArgs(config, 'SyncAssets', outputPath);
+
+  // Pass scan mode: metadata (default, zero loading) or deep (full Blueprint loading)
+  args.push(`-Mode=${deep ? 'deep' : 'metadata'}`);
+
+  // Build and pass filter prefixes (include + exclude)
+  const filters = await buildFilterPrefixes(repoPath, config);
+  if (filters.include_prefixes.length > 0 || filters.exclude_prefixes.length > 0) {
+    const filterJsonPath = path.join(unrealPaths.requests_dir, `filter-${randomUUID()}.json`);
+    await fs.writeFile(filterJsonPath, JSON.stringify(filters), 'utf-8');
+    args.push(`-FilterJson=${filterJsonPath}`);
+  }
 
   try {
     const { stdout } = await runCommand(config, 'SyncAssets', args);

@@ -9,8 +9,13 @@
 #include "EdGraph/EdGraphNode.h"
 #include "EdGraph/EdGraphPin.h"
 #include "Engine/Blueprint.h"
+#include "EdGraphSchema_K2.h"
 #include "K2Node_CallFunction.h"
 #include "K2Node_Event.h"
+#include "K2Node_IfThenElse.h"
+#include "K2Node_Switch.h"
+#include "K2Node_VariableGet.h"
+#include "K2Node_VariableSet.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Guid.h"
@@ -19,6 +24,7 @@
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "UObject/SoftObjectPath.h"
+#include "UObject/GarbageCollection.h"
 
 UGitNexusBlueprintAnalyzerCommandlet::UGitNexusBlueprintAnalyzerCommandlet()
 {
@@ -43,7 +49,17 @@ int32 UGitNexusBlueprintAnalyzerCommandlet::Main(const FString& Params)
 
 	if (Operation.Equals(TEXT("SyncAssets"), ESearchCase::IgnoreCase))
 	{
-		return RunSyncAssets(OutputJsonPath);
+		FString FilterJsonPath;
+		FParse::Value(*Params, TEXT("FilterJson="), FilterJsonPath);
+		// Legacy support: also check IgnoreJson= for backward compatibility
+		if (FilterJsonPath.IsEmpty())
+		{
+			FParse::Value(*Params, TEXT("IgnoreJson="), FilterJsonPath);
+		}
+		FString ModeStr;
+		FParse::Value(*Params, TEXT("Mode="), ModeStr);
+		const bool bDeepMode = ModeStr.Equals(TEXT("deep"), ESearchCase::IgnoreCase);
+		return RunSyncAssets(OutputJsonPath, FilterJsonPath, bDeepMode);
 	}
 
 	if (Operation.Equals(TEXT("FindNativeBlueprintReferences"), ESearchCase::IgnoreCase))
@@ -76,15 +92,141 @@ int32 UGitNexusBlueprintAnalyzerCommandlet::Main(const FString& Params)
 	return 1;
 }
 
-int32 UGitNexusBlueprintAnalyzerCommandlet::RunSyncAssets(const FString& OutputJsonPath)
+// ── SyncAssets entry point ──────────────────────────────────────────────
+
+int32 UGitNexusBlueprintAnalyzerCommandlet::RunSyncAssets(
+	const FString& OutputJsonPath,
+	const FString& FilterJsonPath,
+	bool bDeepMode)
+{
+	const FFilterPrefixes Filters = LoadFilterPrefixes(FilterJsonPath);
+	const TArray<FAssetData> Assets = GetAllBlueprintAssets(Filters);
+
+	if (bDeepMode)
+	{
+		UE_LOG(LogTemp, Display, TEXT("GitNexusBlueprintAnalyzer: Running in DEEP mode (full Blueprint loading)"));
+		return RunSyncAssetsDeep(OutputJsonPath, Assets);
+	}
+
+	UE_LOG(LogTemp, Display, TEXT("GitNexusBlueprintAnalyzer: Running in METADATA mode (no asset loading)"));
+	return RunSyncAssetsMetadata(OutputJsonPath, Assets);
+}
+
+// ── Metadata-only sync (default) ────────────────────────────────────────
+// Uses FAssetData tags + AssetRegistry dependencies. Zero asset loading.
+
+int32 UGitNexusBlueprintAnalyzerCommandlet::RunSyncAssetsMetadata(
+	const FString& OutputJsonPath,
+	const TArray<FAssetData>& Assets)
 {
 	TArray<TSharedPtr<FJsonValue>> AssetValues;
+	IAssetRegistry& AssetRegistry = IAssetRegistry::GetChecked();
 
-	for (const FAssetData& AssetData : GetAllBlueprintAssets())
+	for (const FAssetData& AssetData : Assets)
 	{
-		UBlueprint* Blueprint = Cast<UBlueprint>(AssetData.GetAsset());
+		TSharedPtr<FJsonObject> AssetObject = MakeShared<FJsonObject>();
+		AssetObject->SetStringField(TEXT("asset_path"), AssetData.GetSoftObjectPath().ToString());
+
+		// GeneratedClass from tag
+		FString GeneratedClassTag;
+		if (AssetData.GetTagValue(FBlueprintTags::GeneratedClassPath, GeneratedClassTag))
+		{
+			AssetObject->SetStringField(TEXT("generated_class"), GeneratedClassTag);
+		}
+
+		// ParentClass from tag
+		FString ParentClassTag;
+		if (AssetData.GetTagValue(FBlueprintTags::ParentClassPath, ParentClassTag))
+		{
+			AssetObject->SetStringField(TEXT("parent_class"), ParentClassTag);
+
+			// Extract native parent from the tag (class name after the last '.')
+			const int32 DotIdx = ParentClassTag.Find(TEXT("."), ESearchCase::IgnoreCase, ESearchDir::FromEnd);
+			if (DotIdx != INDEX_NONE)
+			{
+				FString ParentClassName = ParentClassTag.Mid(DotIdx + 1);
+				// Remove trailing _C suffix if present (generated class suffix)
+				if (ParentClassName.EndsWith(TEXT("_C")))
+				{
+					ParentClassName = ParentClassName.LeftChop(2);
+				}
+				// Remove trailing ' (quote) from path notation
+				ParentClassName.RemoveFromEnd(TEXT("'"));
+				TArray<TSharedPtr<FJsonValue>> NativeParents;
+				NativeParents.Add(MakeShared<FJsonValueString>(ParentClassName));
+				AssetObject->SetArrayField(TEXT("native_parents"), NativeParents);
+			}
+		}
+
+		// NativeParentClass tag (more reliable for native parents)
+		FString NativeParentClassTag;
+		if (AssetData.GetTagValue(FBlueprintTags::NativeParentClassPath, NativeParentClassTag))
+		{
+			const int32 DotIdx = NativeParentClassTag.Find(TEXT("."), ESearchCase::IgnoreCase, ESearchDir::FromEnd);
+			if (DotIdx != INDEX_NONE)
+			{
+				FString NativeClassName = NativeParentClassTag.Mid(DotIdx + 1);
+				NativeClassName.RemoveFromEnd(TEXT("'"));
+				TArray<TSharedPtr<FJsonValue>> NativeParents;
+				NativeParents.Add(MakeShared<FJsonValueString>(NativeClassName));
+				AssetObject->SetArrayField(TEXT("native_parents"), NativeParents);
+			}
+		}
+
+		// Dependencies from AssetRegistry (no loading needed)
+		TArray<FName> Dependencies;
+		AssetRegistry.GetDependencies(AssetData.PackageName, Dependencies, UE::AssetRegistry::EDependencyCategory::Package);
+		TArray<TSharedPtr<FJsonValue>> DependencyValues;
+		for (const FName& Dependency : Dependencies)
+		{
+			DependencyValues.Add(MakeShared<FJsonValueString>(Dependency.ToString()));
+		}
+		AssetObject->SetArrayField(TEXT("dependencies"), DependencyValues);
+
+		// native_function_refs not available in metadata mode
+		AssetObject->SetArrayField(TEXT("native_function_refs"), TArray<TSharedPtr<FJsonValue>>());
+
+		AssetValues.Add(MakeShared<FJsonValueObject>(AssetObject));
+	}
+
+	UE_LOG(LogTemp, Display, TEXT("GitNexusBlueprintAnalyzer: %d assets indexed (metadata mode)"), AssetValues.Num());
+
+	TSharedPtr<FJsonObject> RootObject = MakeShared<FJsonObject>();
+	RootObject->SetNumberField(TEXT("version"), 1);
+	RootObject->SetStringField(TEXT("generated_at"), FDateTime::UtcNow().ToIso8601());
+	RootObject->SetStringField(TEXT("project_path"), FPaths::ConvertRelativePathToFull(FPaths::GetProjectFilePath()));
+	RootObject->SetStringField(TEXT("mode"), TEXT("metadata"));
+	RootObject->SetArrayField(TEXT("assets"), AssetValues);
+
+	return WriteJsonToFile(OutputJsonPath, RootObject) ? 0 : 1;
+}
+
+// ── Deep sync (--deep) ──────────────────────────────────────────────────
+// Loads each Blueprint fully to extract native_function_refs from graphs.
+// Uses batch GC to prevent OOM on large projects.
+
+static constexpr int32 DEEP_BATCH_SIZE = 50;
+
+int32 UGitNexusBlueprintAnalyzerCommandlet::RunSyncAssetsDeep(
+	const FString& OutputJsonPath,
+	const TArray<FAssetData>& Assets)
+{
+	TArray<TSharedPtr<FJsonValue>> AssetValues;
+	int32 SkippedCount = 0;
+	int32 BatchCounter = 0;
+
+	for (const FAssetData& AssetData : Assets)
+	{
+		const FSoftObjectPath SoftPath = AssetData.GetSoftObjectPath();
+		UObject* LoadedAsset = SoftPath.TryLoad();
+		UBlueprint* Blueprint = LoadedAsset ? Cast<UBlueprint>(LoadedAsset) : nullptr;
 		if (!Blueprint)
 		{
+			if (!LoadedAsset)
+			{
+				SkippedCount++;
+				UE_LOG(LogTemp, Warning, TEXT("GitNexusBlueprintAnalyzer: Skipped asset (failed to load): %s"), *AssetData.PackageName.ToString());
+			}
 			continue;
 		}
 
@@ -154,16 +296,34 @@ int32 UGitNexusBlueprintAnalyzerCommandlet::RunSyncAssets(const FString& OutputJ
 		AssetObject->SetArrayField(TEXT("native_function_refs"), NativeFunctionRefValues);
 
 		AssetValues.Add(MakeShared<FJsonValueObject>(AssetObject));
+
+		// Batch GC to prevent OOM on large projects
+		BatchCounter++;
+		if (BatchCounter >= DEEP_BATCH_SIZE)
+		{
+			CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+			BatchCounter = 0;
+			UE_LOG(LogTemp, Display, TEXT("GitNexusBlueprintAnalyzer: Processed %d / %d assets (GC)"), AssetValues.Num(), Assets.Num());
+		}
 	}
+
+	if (SkippedCount > 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("GitNexusBlueprintAnalyzer: %d assets skipped (failed to load)"), SkippedCount);
+	}
+	UE_LOG(LogTemp, Display, TEXT("GitNexusBlueprintAnalyzer: %d assets indexed (deep mode)"), AssetValues.Num());
 
 	TSharedPtr<FJsonObject> RootObject = MakeShared<FJsonObject>();
 	RootObject->SetNumberField(TEXT("version"), 1);
 	RootObject->SetStringField(TEXT("generated_at"), FDateTime::UtcNow().ToIso8601());
 	RootObject->SetStringField(TEXT("project_path"), FPaths::ConvertRelativePathToFull(FPaths::GetProjectFilePath()));
+	RootObject->SetStringField(TEXT("mode"), TEXT("deep"));
 	RootObject->SetArrayField(TEXT("assets"), AssetValues);
 
 	return WriteJsonToFile(OutputJsonPath, RootObject) ? 0 : 1;
 }
+
+// ── FindNativeBlueprintReferences ───────────────────────────────────────
 
 int32 UGitNexusBlueprintAnalyzerCommandlet::RunFindNativeBlueprintReferences(
 	const FString& OutputJsonPath,
@@ -215,6 +375,8 @@ int32 UGitNexusBlueprintAnalyzerCommandlet::RunFindNativeBlueprintReferences(
 	return WriteJsonToFile(OutputJsonPath, RootObject) ? 0 : 1;
 }
 
+// ── ExpandBlueprintChain ────────────────────────────────────────────────
+
 int32 UGitNexusBlueprintAnalyzerCommandlet::RunExpandBlueprintChain(
 	const FString& OutputJsonPath,
 	const FString& AssetPath,
@@ -235,26 +397,36 @@ int32 UGitNexusBlueprintAnalyzerCommandlet::RunExpandBlueprintChain(
 		return 1;
 	}
 
+	struct FChainFrontierEntry
+	{
+		UEdGraphNode* Node;
+		int32 Depth;
+		FString TraversedFromPinName;
+		FGuid TraversedFromNodeId;
+	};
+
 	TArray<TSharedPtr<FJsonValue>> NodeValues;
 	TSet<FGuid> Visited;
-	TArray<TPair<UEdGraphNode*, int32>> Frontier;
-	Frontier.Add(TPair<UEdGraphNode*, int32>(StartNode, 0));
+	TArray<FChainFrontierEntry> Frontier;
+	Frontier.Add({ StartNode, 0, FString(), FGuid() });
 	Visited.Add(StartNode->NodeGuid);
 
 	const bool bUpstream = Direction.Equals(TEXT("upstream"), ESearchCase::IgnoreCase);
 
 	while (Frontier.Num() > 0)
 	{
-		const TPair<UEdGraphNode*, int32> Current = Frontier[0];
+		const FChainFrontierEntry Current = Frontier[0];
 		Frontier.RemoveAt(0);
 
-		NodeValues.Add(MakeShared<FJsonValueObject>(BuildChainNodeJson(Current.Key->GetGraph(), Current.Key, Current.Value)));
-		if (Current.Value >= MaxDepth)
+		NodeValues.Add(MakeShared<FJsonValueObject>(BuildChainNodeJson(
+			Current.Node->GetGraph(), Current.Node, Current.Depth,
+			Current.TraversedFromPinName, Current.TraversedFromNodeId)));
+		if (Current.Depth >= MaxDepth)
 		{
 			continue;
 		}
 
-		for (UEdGraphPin* Pin : Current.Key->Pins)
+		for (UEdGraphPin* Pin : Current.Node->Pins)
 		{
 			if (!Pin)
 			{
@@ -280,8 +452,9 @@ int32 UGitNexusBlueprintAnalyzerCommandlet::RunExpandBlueprintChain(
 					continue;
 				}
 
+				// NOTE: In diamond-shaped graphs, BFS only records the first-discovered parent.
 				Visited.Add(NextNode->NodeGuid);
-				Frontier.Add(TPair<UEdGraphNode*, int32>(NextNode, Current.Value + 1));
+				Frontier.Add({ NextNode, Current.Depth + 1, Pin->PinName.ToString(), Current.Node->NodeGuid });
 			}
 		}
 	}
@@ -290,6 +463,8 @@ int32 UGitNexusBlueprintAnalyzerCommandlet::RunExpandBlueprintChain(
 	RootObject->SetArrayField(TEXT("nodes"), NodeValues);
 	return WriteJsonToFile(OutputJsonPath, RootObject) ? 0 : 1;
 }
+
+// ── Utility functions ───────────────────────────────────────────────────
 
 bool UGitNexusBlueprintAnalyzerCommandlet::WriteJsonToFile(const FString& OutputJsonPath, const TSharedPtr<FJsonObject>& RootObject) const
 {
@@ -300,7 +475,7 @@ bool UGitNexusBlueprintAnalyzerCommandlet::WriteJsonToFile(const FString& Output
 		return false;
 	}
 
-	return FFileHelper::SaveStringToFile(JsonText, *OutputJsonPath);
+	return FFileHelper::SaveStringToFile(JsonText, *OutputJsonPath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
 }
 
 TArray<FString> UGitNexusBlueprintAnalyzerCommandlet::LoadCandidateAssets(const FString& CandidatesJsonPath) const
@@ -346,7 +521,70 @@ TArray<FString> UGitNexusBlueprintAnalyzerCommandlet::LoadCandidateAssets(const 
 	return Result;
 }
 
-TArray<FAssetData> UGitNexusBlueprintAnalyzerCommandlet::GetAllBlueprintAssets() const
+UGitNexusBlueprintAnalyzerCommandlet::FFilterPrefixes
+UGitNexusBlueprintAnalyzerCommandlet::LoadFilterPrefixes(const FString& FilterJsonPath) const
+{
+	FFilterPrefixes Result;
+	if (FilterJsonPath.IsEmpty())
+	{
+		return Result;
+	}
+
+	FString RawJson;
+	if (!FFileHelper::LoadFileToString(RawJson, *FilterJsonPath))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("GitNexusBlueprintAnalyzer: Could not read filter file: %s"), *FilterJsonPath);
+		return Result;
+	}
+
+	TSharedPtr<FJsonObject> RootObject;
+	const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(RawJson);
+	if (!FJsonSerializer::Deserialize(Reader, RootObject) || !RootObject.IsValid())
+	{
+		return Result;
+	}
+
+	// Read include_prefixes (whitelist — if set, ONLY these paths are included)
+	const TArray<TSharedPtr<FJsonValue>>* IncludeValues = nullptr;
+	if (RootObject->TryGetArrayField(TEXT("include_prefixes"), IncludeValues) && IncludeValues)
+	{
+		for (const TSharedPtr<FJsonValue>& Value : *IncludeValues)
+		{
+			FString Prefix;
+			if (Value.IsValid() && Value->TryGetString(Prefix))
+			{
+				Result.IncludePrefixes.Add(Prefix);
+			}
+		}
+	}
+
+	// Read exclude_prefixes (blacklist)
+	const TArray<TSharedPtr<FJsonValue>>* ExcludeValues = nullptr;
+	if (RootObject->TryGetArrayField(TEXT("exclude_prefixes"), ExcludeValues) && ExcludeValues)
+	{
+		for (const TSharedPtr<FJsonValue>& Value : *ExcludeValues)
+		{
+			FString Prefix;
+			if (Value.IsValid() && Value->TryGetString(Prefix))
+			{
+				Result.ExcludePrefixes.Add(Prefix);
+			}
+		}
+	}
+
+	if (Result.IncludePrefixes.Num() > 0)
+	{
+		UE_LOG(LogTemp, Display, TEXT("GitNexusBlueprintAnalyzer: Loaded %d include prefixes (whitelist)"), Result.IncludePrefixes.Num());
+	}
+	if (Result.ExcludePrefixes.Num() > 0)
+	{
+		UE_LOG(LogTemp, Display, TEXT("GitNexusBlueprintAnalyzer: Loaded %d exclude prefixes"), Result.ExcludePrefixes.Num());
+	}
+
+	return Result;
+}
+
+TArray<FAssetData> UGitNexusBlueprintAnalyzerCommandlet::GetAllBlueprintAssets(const FFilterPrefixes& Filters) const
 {
 	FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
 	IAssetRegistry& AssetRegistry = AssetRegistryModule.Get();
@@ -356,9 +594,69 @@ TArray<FAssetData> UGitNexusBlueprintAnalyzerCommandlet::GetAllBlueprintAssets()
 	Filter.ClassPaths.Add(UBlueprint::StaticClass()->GetClassPathName());
 	Filter.bRecursiveClasses = true;
 
-	TArray<FAssetData> Assets;
-	AssetRegistry.GetAssets(Filter, Assets);
-	return Assets;
+	TArray<FAssetData> AllAssets;
+	AssetRegistry.GetAssets(Filter, AllAssets);
+
+	const bool bHasIncludes = Filters.IncludePrefixes.Num() > 0;
+	const bool bHasExcludes = Filters.ExcludePrefixes.Num() > 0;
+
+	if (!bHasIncludes && !bHasExcludes)
+	{
+		return AllAssets;
+	}
+
+	TArray<FAssetData> FilteredAssets;
+	int32 IncludedCount = 0;
+	int32 ExcludedCount = 0;
+
+	for (const FAssetData& Asset : AllAssets)
+	{
+		const FString PackagePath = Asset.PackageName.ToString();
+
+		// Include filter (whitelist): if set, asset MUST match at least one prefix
+		if (bHasIncludes)
+		{
+			bool bIncluded = false;
+			for (const FString& Prefix : Filters.IncludePrefixes)
+			{
+				if (PackagePath.StartsWith(Prefix))
+				{
+					bIncluded = true;
+					break;
+				}
+			}
+			if (!bIncluded)
+			{
+				IncludedCount++;
+				continue;
+			}
+		}
+
+		// Exclude filter (blacklist): skip assets matching any prefix
+		if (bHasExcludes)
+		{
+			bool bExcluded = false;
+			for (const FString& Prefix : Filters.ExcludePrefixes)
+			{
+				if (PackagePath.StartsWith(Prefix))
+				{
+					bExcluded = true;
+					break;
+				}
+			}
+			if (bExcluded)
+			{
+				ExcludedCount++;
+				continue;
+			}
+		}
+
+		FilteredAssets.Add(Asset);
+	}
+
+	UE_LOG(LogTemp, Display, TEXT("GitNexusBlueprintAnalyzer: %d assets after filtering (%d outside include scope, %d excluded)"),
+		FilteredAssets.Num(), IncludedCount, ExcludedCount);
+	return FilteredAssets;
 }
 
 UBlueprint* UGitNexusBlueprintAnalyzerCommandlet::LoadBlueprintFromAssetPath(const FString& AssetPath) const
@@ -419,7 +717,9 @@ TSharedPtr<FJsonObject> UGitNexusBlueprintAnalyzerCommandlet::BuildReferenceJson
 	return Object;
 }
 
-TSharedPtr<FJsonObject> UGitNexusBlueprintAnalyzerCommandlet::BuildChainNodeJson(const UEdGraph* Graph, const UEdGraphNode* Node, int32 Depth) const
+TSharedPtr<FJsonObject> UGitNexusBlueprintAnalyzerCommandlet::BuildChainNodeJson(
+	const UEdGraph* Graph, const UEdGraphNode* Node, int32 Depth,
+	const FString& TraversedFromPinName, const FGuid& TraversedFromNodeId) const
 {
 	TSharedPtr<FJsonObject> Object = MakeShared<FJsonObject>();
 	Object->SetStringField(TEXT("node_id"), Node ? Node->NodeGuid.ToString(EGuidFormats::DigitsWithHyphens) : FString());
@@ -427,7 +727,172 @@ TSharedPtr<FJsonObject> UGitNexusBlueprintAnalyzerCommandlet::BuildChainNodeJson
 	Object->SetStringField(TEXT("node_kind"), Node ? Node->GetClass()->GetName() : FString());
 	Object->SetStringField(TEXT("node_title"), Node ? Node->GetNodeTitle(ENodeTitleType::ListView).ToString() : FString());
 	Object->SetNumberField(TEXT("depth"), Depth);
+
+	if (!TraversedFromPinName.IsEmpty())
+	{
+		Object->SetStringField(TEXT("traversed_from_pin"), TraversedFromPinName);
+	}
+	if (TraversedFromNodeId.IsValid())
+	{
+		Object->SetStringField(TEXT("traversed_from_node"), TraversedFromNodeId.ToString(EGuidFormats::DigitsWithHyphens));
+	}
+
+	if (Node)
+	{
+		AnnotateNodeMetadata(Object, Node);
+		Object->SetObjectField(TEXT("pins"), BuildPinsJson(Node));
+		AnnotateNodeDetails(Object, Node);
+	}
+
 	return Object;
+}
+
+TSharedPtr<FJsonObject> UGitNexusBlueprintAnalyzerCommandlet::BuildPinJson(const UEdGraphPin* Pin) const
+{
+	TSharedPtr<FJsonObject> PinObj = MakeShared<FJsonObject>();
+	if (!Pin)
+	{
+		return PinObj;
+	}
+
+	PinObj->SetStringField(TEXT("name"), Pin->PinName.ToString());
+	PinObj->SetStringField(TEXT("direction"), Pin->Direction == EGPD_Input ? TEXT("input") : TEXT("output"));
+	PinObj->SetStringField(TEXT("type"), Pin->PinType.PinCategory.ToString());
+
+	if (Pin->PinType.PinSubCategoryObject.IsValid())
+	{
+		PinObj->SetStringField(TEXT("sub_type"), Pin->PinType.PinSubCategoryObject->GetName());
+	}
+
+	if (!Pin->DefaultValue.IsEmpty())
+	{
+		PinObj->SetStringField(TEXT("default_value"), Pin->DefaultValue);
+	}
+	else if (Pin->DefaultObject)
+	{
+		PinObj->SetStringField(TEXT("default_value"), Pin->DefaultObject->GetPathName());
+	}
+
+	if (Pin->LinkedTo.Num() > 0)
+	{
+		TArray<TSharedPtr<FJsonValue>> ConnectedTo;
+		TArray<TSharedPtr<FJsonValue>> ConnectedToTitle;
+		for (const UEdGraphPin* LinkedPin : Pin->LinkedTo)
+		{
+			if (LinkedPin && LinkedPin->GetOwningNode())
+			{
+				ConnectedTo.Add(MakeShared<FJsonValueString>(
+					LinkedPin->GetOwningNode()->NodeGuid.ToString(EGuidFormats::DigitsWithHyphens)));
+				ConnectedToTitle.Add(MakeShared<FJsonValueString>(
+					LinkedPin->GetOwningNode()->GetNodeTitle(ENodeTitleType::ListView).ToString()));
+			}
+		}
+		PinObj->SetArrayField(TEXT("connected_to"), ConnectedTo);
+		PinObj->SetArrayField(TEXT("connected_to_title"), ConnectedToTitle);
+	}
+
+	return PinObj;
+}
+
+TSharedPtr<FJsonObject> UGitNexusBlueprintAnalyzerCommandlet::BuildPinsJson(const UEdGraphNode* Node) const
+{
+	TSharedPtr<FJsonObject> PinsObj = MakeShared<FJsonObject>();
+	if (!Node)
+	{
+		return PinsObj;
+	}
+
+	TArray<TSharedPtr<FJsonValue>> ExecPins;
+	TArray<TSharedPtr<FJsonValue>> DataPins;
+
+	for (const UEdGraphPin* Pin : Node->Pins)
+	{
+		if (!Pin)
+		{
+			continue;
+		}
+
+		TSharedPtr<FJsonObject> PinJson = BuildPinJson(Pin);
+		if (Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_Exec)
+		{
+			ExecPins.Add(MakeShared<FJsonValueObject>(PinJson));
+		}
+		else
+		{
+			DataPins.Add(MakeShared<FJsonValueObject>(PinJson));
+		}
+	}
+
+	PinsObj->SetArrayField(TEXT("exec_pins"), ExecPins);
+	PinsObj->SetArrayField(TEXT("data_pins"), DataPins);
+	return PinsObj;
+}
+
+void UGitNexusBlueprintAnalyzerCommandlet::AnnotateNodeMetadata(TSharedPtr<FJsonObject>& NodeObj, const UEdGraphNode* Node) const
+{
+	if (!Node)
+	{
+		return;
+	}
+
+	NodeObj->SetBoolField(TEXT("is_enabled"), Node->IsNodeEnabled());
+
+	if (!Node->NodeComment.IsEmpty())
+	{
+		NodeObj->SetStringField(TEXT("comment"), Node->NodeComment);
+	}
+}
+
+void UGitNexusBlueprintAnalyzerCommandlet::AnnotateNodeDetails(TSharedPtr<FJsonObject>& NodeObj, const UEdGraphNode* Node) const
+{
+	if (!Node)
+	{
+		return;
+	}
+
+	TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+	bool bHasDetails = false;
+
+	if (const UK2Node_CallFunction* CallNode = Cast<UK2Node_CallFunction>(Node))
+	{
+		Details->SetBoolField(TEXT("is_pure"), CallNode->IsNodePure());
+		if (const UFunction* TargetFunction = CallNode->GetTargetFunction())
+		{
+			Details->SetStringField(TEXT("function_name"), TargetFunction->GetName());
+			if (const UClass* OwnerClass = TargetFunction->GetOwnerClass())
+			{
+				Details->SetStringField(TEXT("target_class"), OwnerClass->GetName());
+			}
+		}
+		bHasDetails = true;
+	}
+	else if (const UK2Node_VariableGet* GetNode = Cast<UK2Node_VariableGet>(Node))
+	{
+		Details->SetStringField(TEXT("variable_name"), GetNode->GetVarName().ToString());
+		Details->SetStringField(TEXT("node_role"), TEXT("variable_get"));
+		bHasDetails = true;
+	}
+	else if (const UK2Node_VariableSet* SetNode = Cast<UK2Node_VariableSet>(Node))
+	{
+		Details->SetStringField(TEXT("variable_name"), SetNode->GetVarName().ToString());
+		Details->SetStringField(TEXT("node_role"), TEXT("variable_set"));
+		bHasDetails = true;
+	}
+	else if (Cast<UK2Node_IfThenElse>(Node))
+	{
+		Details->SetStringField(TEXT("branch_type"), TEXT("if_then_else"));
+		bHasDetails = true;
+	}
+	else if (Cast<UK2Node_Switch>(Node))
+	{
+		Details->SetStringField(TEXT("branch_type"), TEXT("switch"));
+		bHasDetails = true;
+	}
+
+	if (bHasDetails)
+	{
+		NodeObj->SetObjectField(TEXT("details"), Details);
+	}
 }
 
 UEdGraphNode* UGitNexusBlueprintAnalyzerCommandlet::FindNodeByGuid(UBlueprint* Blueprint, const FString& NodeGuid) const

@@ -10,6 +10,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { KnowledgeGraph, GraphNode } from '../core/graph/types.js';
 import { generateId } from '../lib/utils.js';
+import { shouldIgnorePath, loadIgnoreRules } from '../config/ignore-service.js';
 import type { UnrealAssetManifest } from './types.js';
 
 export interface BlueprintIngestionResult {
@@ -40,6 +41,27 @@ const extractClassName = (unrealPath: string): string => {
 };
 
 /**
+ * Convert an Unreal asset path to a filesystem-relative path for ignore matching.
+ * "/Game/Characters/BP_Hero"       → "Content/Characters/BP_Hero"
+ * "/MyPlugin/Maps/TestMap"         → "Plugins/MyPlugin/Content/Maps/TestMap"
+ * "/Engine/BasicShapes/Cube"       → "Engine/Content/BasicShapes/Cube"
+ */
+export const assetPathToRelative = (assetPath: string): string => {
+  // Strip leading slash
+  const trimmed = assetPath.startsWith('/') ? assetPath.slice(1) : assetPath;
+  const slashIdx = trimmed.indexOf('/');
+  if (slashIdx < 0) return trimmed;
+
+  const mount = trimmed.slice(0, slashIdx);
+  const rest = trimmed.slice(slashIdx + 1);
+
+  if (mount === 'Game') return `Content/${rest}`;
+  if (mount === 'Engine') return `Engine/Content/${rest}`;
+  // Plugin mounts: /PluginName/X → Plugins/PluginName/Content/X
+  return `Plugins/${mount}/Content/${rest}`;
+};
+
+/**
  * Ingest Blueprint assets from the Unreal asset manifest into the knowledge graph.
  * Creates Blueprint nodes and edges (EXTENDS, CALLS, IMPORTS) linking them to
  * existing C++ symbols in the graph.
@@ -47,6 +69,7 @@ const extractClassName = (unrealPath: string): string => {
 export const ingestBlueprintsIntoGraph = async (
   graph: KnowledgeGraph,
   storagePath: string,
+  repoPath?: string,
 ): Promise<BlueprintIngestionResult> => {
   const manifestPath = path.join(storagePath, 'unreal', 'asset-manifest.json');
 
@@ -61,6 +84,15 @@ export const ingestBlueprintsIntoGraph = async (
   if (!manifest.assets || manifest.assets.length === 0) {
     return { nodesAdded: 0, edgesAdded: 0 };
   }
+
+  // ── Filter assets through ignore rules ─────────────────────────────
+  const ig = repoPath ? await loadIgnoreRules(repoPath) : null;
+  const assets = manifest.assets.filter(asset => {
+    const relPath = assetPathToRelative(asset.asset_path);
+    if (shouldIgnorePath(relPath)) return false;
+    if (ig && ig.ignores(relPath)) return false;
+    return true;
+  });
 
   // ── Build lookup indexes from existing graph nodes ──────────────────
 
@@ -114,7 +146,7 @@ export const ingestBlueprintsIntoGraph = async (
   // Track created Blueprint IDs for second-pass dependency edges
   const blueprintIdByAssetPath = new Map<string, string>();
 
-  for (const asset of manifest.assets) {
+  for (const asset of assets) {
     const bpId = generateId('Blueprint', asset.asset_path);
     const bpName = extractAssetName(asset.asset_path);
 
@@ -191,7 +223,7 @@ export const ingestBlueprintsIntoGraph = async (
   }
 
   // ── Second pass: Blueprint-to-Blueprint IMPORTS edges ───────────────
-  for (const asset of manifest.assets) {
+  for (const asset of assets) {
     const deps = asset.dependencies || [];
     if (deps.length === 0) continue;
 

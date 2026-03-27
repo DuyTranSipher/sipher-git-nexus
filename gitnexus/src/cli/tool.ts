@@ -158,18 +158,20 @@ export async function cypherCommand(query: string, options?: {
 
 export async function syncUnrealAssetManifestCommand(options?: {
   repo?: string;
+  deep?: boolean;
 }): Promise<void> {
   const backend = await getBackend();
+  const mode = options?.deep ? 'deep' : 'metadata';
   const result = await withUnrealProgress(
-    () => backend.callTool('sync_unreal_asset_manifest', { repo: options?.repo }),
-    { phaseLabel: 'Syncing Unreal asset manifest', successLabel: 'Manifest synced', failLabel: 'Manifest sync failed', isError: isUnrealError },
+    () => backend.callTool('sync_unreal_asset_manifest', { repo: options?.repo, deep: options?.deep }),
+    { phaseLabel: `Syncing Unreal asset manifest (${mode} mode)`, successLabel: 'Manifest synced', failLabel: 'Manifest sync failed', isError: isUnrealError },
   );
   if (result?.status === 'error') {
     console.error(`\n  Error: ${result.error}\n`);
     process.exit(1);
   }
   if (result?.asset_count != null) {
-    console.log(`  ${result.asset_count.toLocaleString()} Blueprint assets indexed`);
+    console.log(`  ${result.asset_count.toLocaleString()} Blueprint assets indexed (${mode} mode)`);
     if (result.manifest_path) console.log(`  ${result.manifest_path}`);
   }
   output(result);

@@ -46,6 +46,10 @@ on other tools (query, context, impact, etc.) to target the correct one.`,
 Uses the configured Unreal Editor commandlet to enumerate Blueprint assets and
 store a manifest under .gitnexus/unreal/asset-manifest.json.
 
+Two modes:
+- metadata (default): Uses AssetRegistry only — zero Blueprint loading, fast and safe for large projects.
+- deep: Loads each Blueprint fully to extract native_function_refs and graph data. Uses batch GC. Pass deep=true.
+
 WHEN TO USE: Before Blueprint-reference queries, after large Blueprint changes, or
 to validate Unreal analyzer configuration.
 AFTER THIS: Use find_native_blueprint_references() or find_blueprints_derived_from_native_class().`,
@@ -53,6 +57,7 @@ AFTER THIS: Use find_native_blueprint_references() or find_blueprints_derived_fr
       type: 'object',
       properties: {
         repo: { type: 'string', description: 'Repository name or path. Omit if only one repo is indexed.' },
+        deep: { type: 'boolean', description: 'Deep mode: fully load Blueprints for native_function_refs (slower, higher memory). Default: false (metadata-only).' },
       },
       required: [],
     },

@@ -349,7 +349,7 @@ export class LocalBackend {
       case 'rename':
         return this.rename(repo, params);
       case 'sync_unreal_asset_manifest':
-        return this.syncUnrealAssetManifestTool(repo);
+        return this.syncUnrealAssetManifestTool(repo, params);
       case 'find_native_blueprint_references':
         return this.findNativeBlueprintReferencesTool(repo, params);
       case 'expand_blueprint_chain':
@@ -538,7 +538,7 @@ export class LocalBackend {
     let manifestRefreshed = false;
 
     if (!manifest) {
-      const syncResult = await syncUnrealAssetManifest(repo.storagePath, config);
+      const syncResult = await syncUnrealAssetManifest(repo.storagePath, config, repo.repoPath);
       if (syncResult.status === 'error') {
         return { error: syncResult.error || 'Failed to build Unreal asset manifest.' };
       }
@@ -558,7 +558,7 @@ export class LocalBackend {
     };
   }
 
-  private async syncUnrealAssetManifestTool(repo: RepoHandle): Promise<any> {
+  private async syncUnrealAssetManifestTool(repo: RepoHandle, params?: { deep?: boolean }): Promise<any> {
     const config = await loadUnrealConfig(repo.storagePath);
     if (!config) {
       const paths = getUnrealStoragePaths(repo.storagePath);
@@ -567,7 +567,7 @@ export class LocalBackend {
       };
     }
 
-    return syncUnrealAssetManifest(repo.storagePath, config);
+    return syncUnrealAssetManifest(repo.storagePath, config, repo.repoPath, params?.deep);
   }
 
   private async findNativeBlueprintReferencesTool(repo: RepoHandle, params: {

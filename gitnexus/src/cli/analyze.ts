@@ -212,7 +212,7 @@ export const analyzeCommand = async (
   // ── Phase 1.5: Blueprint Ingestion (optional) ────────────────────────
   try {
     const { ingestBlueprintsIntoGraph } = await import('../unreal/blueprint-ingestion.js');
-    const bpResult = await ingestBlueprintsIntoGraph(pipelineResult.graph, storagePath);
+    const bpResult = await ingestBlueprintsIntoGraph(pipelineResult.graph, storagePath, repoPath);
     if (bpResult.nodesAdded > 0) {
       updateBar(61, `Indexed ${bpResult.nodesAdded} Blueprints (${bpResult.edgesAdded} edges)`);
     }

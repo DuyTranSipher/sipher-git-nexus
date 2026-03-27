@@ -519,18 +519,27 @@ async function setupUnreal(options: UnrealSetupOptions, result: SetupResult): Pr
   }
 
   // Write config — split into shared (project root, committable) and local (gitignored)
+  // Preserve existing values when re-running with --force
   const sharedConfigPath = path.join(projectRoot, '.gitnexus-unreal.json');
   try {
-    // Shared config: team-wide settings (committable to git)
-    const sharedConfig = {
+    // Read existing configs to preserve user customizations
+    let existingShared: Record<string, unknown> = {};
+    let existingLocal: Record<string, unknown> = {};
+    try { existingShared = JSON.parse(await fs.readFile(sharedConfigPath, 'utf-8')); } catch { /* fresh install */ }
+    try { existingLocal = JSON.parse(await fs.readFile(configPath, 'utf-8')); } catch { /* fresh install */ }
+
+    // Shared config: merge defaults under existing values (existing wins)
+    const sharedDefaults = {
       commandlet: 'GitNexusBlueprintAnalyzer',
       timeout_ms: 300000,
     };
+    const sharedConfig = { ...sharedDefaults, ...existingShared };
     await fs.writeFile(sharedConfigPath, JSON.stringify(sharedConfig, null, 2) + '\n', 'utf-8');
 
-    // Local config: machine-specific paths (gitignored in .gitnexus/)
+    // Local config: always update editor_cmd/project_path, preserve other local overrides
     await fs.mkdir(unrealDir, { recursive: true });
     const localConfig = {
+      ...existingLocal,
       editor_cmd: editorCmd.replace(/\\/g, '/'),
       project_path: uprojectPath.replace(/\\/g, '/'),
     };

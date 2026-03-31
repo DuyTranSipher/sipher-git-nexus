@@ -221,13 +221,24 @@ int32 UGitNexusBlueprintAnalyzerCommandlet::RunSyncAssetsDeep(
 		const FSoftObjectPath SoftPath = AssetData.GetSoftObjectPath();
 		UObject* LoadedAsset = SoftPath.TryLoad();
 		UBlueprint* Blueprint = LoadedAsset ? Cast<UBlueprint>(LoadedAsset) : nullptr;
+		if (!LoadedAsset)
+		{
+			SkippedCount++;
+			UE_LOG(LogTemp, Warning, TEXT("GitNexusBlueprintAnalyzer: Skipped asset (failed to load): %s"), *AssetData.PackageName.ToString());
+			continue;
+		}
 		if (!Blueprint)
 		{
-			if (!LoadedAsset)
-			{
-				SkippedCount++;
-				UE_LOG(LogTemp, Warning, TEXT("GitNexusBlueprintAnalyzer: Skipped asset (failed to load): %s"), *AssetData.PackageName.ToString());
-			}
+			// Non-Blueprint asset (e.g. UStateTree / UDataAsset): emit metadata-only entry
+			TSharedPtr<FJsonObject> AssetObject = MakeShared<FJsonObject>();
+			AssetObject->SetStringField(TEXT("asset_path"), AssetData.GetSoftObjectPath().ToString());
+			TArray<FName> Deps;
+			IAssetRegistry::GetChecked().GetDependencies(AssetData.PackageName, Deps, UE::AssetRegistry::EDependencyCategory::Package);
+			TArray<TSharedPtr<FJsonValue>> DepValues;
+			for (const FName& Dep : Deps)
+				DepValues.Add(MakeShared<FJsonValueString>(Dep.ToString()));
+			AssetObject->SetArrayField(TEXT("dependencies"), DepValues);
+			AssetValues.Add(MakeShared<FJsonValueObject>(AssetObject));
 			continue;
 		}
 

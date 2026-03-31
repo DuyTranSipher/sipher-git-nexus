@@ -538,12 +538,18 @@ static bool GlobMatchImpl(const TCHAR* Path, const TCHAR* Pat)
 		if (Pat[0] == TEXT('*') && Pat[1] == TEXT('*'))
 		{
 			Pat += 2;
-			if (*Pat == TEXT('/')) ++Pat; // consume optional separator after **
+			if (*Pat == TEXT('/')) ++Pat; // consume separator after **
 			if (!*Pat) return true;       // ** at end matches everything remaining
-			// Try matching the rest of the pattern at every position in Path
-			do {
-				if (GlobMatchImpl(Path, Pat)) return true;
-			} while (*Path++);
+			// Try remaining pattern only at segment boundaries (positions after '/'),
+			// not at every character — prevents "BURST_" from matching "ST_*".
+			const TCHAR* Segment = Path;
+			while (true)
+			{
+				if (GlobMatchImpl(Segment, Pat)) return true;
+				while (*Segment && *Segment != TEXT('/')) ++Segment;
+				if (!*Segment) break;
+				++Segment; // skip the '/'
+			}
 			return false;
 		}
 		if (*Pat == TEXT('*'))
@@ -702,6 +708,8 @@ TArray<FAssetData> UGitNexusBlueprintAnalyzerCommandlet::GetAllBlueprintAssets(c
 
 	FARFilter Filter;
 	Filter.ClassPaths.Add(UBlueprint::StaticClass()->GetClassPathName());
+	// Also include StateTree assets (UStateTree derives from UDataAsset, not UBlueprint)
+	Filter.ClassPaths.Add(FTopLevelAssetPath(FName("/Script/StateTreeModule"), FName("StateTree")));
 	Filter.bRecursiveClasses = true;
 
 	TArray<FAssetData> AllAssets;

@@ -4,6 +4,12 @@ All notable changes to GitNexus will be documented in this file.
 
 ## [Unreleased]
 
+## [1.3.7] - 2026-03-31
+
+### Fixed
+
+- **Unreal deep mode drops non-Blueprint assets**: `gitnexus unreal-sync --deep` now includes `UStateTree` (and any other `UDataAsset` subclass) in the manifest. Previously, assets that loaded successfully but failed `Cast<UBlueprint>` were silently skipped; they now produce a metadata-only entry (asset_path + dependencies).
+
 ## [1.3.6] - 2026-03-31
 
 ### Fixed

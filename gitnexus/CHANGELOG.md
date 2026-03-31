@@ -4,6 +4,17 @@ All notable changes to GitNexus will be documented in this file.
 
 ## [Unreleased]
 
+## [1.3.6] - 2026-03-31
+
+### Fixed
+
+- **Unreal glob `**` segment boundary**: `/**/ST_*` no longer false-matches assets whose names contain `ST_` as a substring (e.g. `GCN_Burst_*`). The `**` wildcard now only tries the remaining pattern at path-segment boundaries (positions after `/`), matching standard glob semantics.
+- **StateTree assets indexed**: `gitnexus unreal-sync` now discovers `UStateTree` assets in addition to Blueprints. `UStateTree` derives from `UDataAsset` (not `UBlueprint`), so it was previously invisible to the asset registry query — fixed by adding `/Script/StateTreeModule.StateTree` to the `FARFilter` class paths.
+
+### Added
+
+- **Glob and regex pattern support for Unreal path filters**: `include_paths` and `exclude_paths` in Unreal config now accept glob patterns (`/**/ST_*`, `Content/**`) and regex patterns (`regex:/Game/ST_`). Values containing `*`, `?`, or `[`, or starting with `regex:`, are automatically routed to the C++ pattern-matching path; plain strings continue to use the fast prefix check.
+
 ### Added
 - `gitnexus sipher-patched [path]` S2 preflight command for validating Sipher gateway environment before wiki generation
 - Sipher gateway header support for wiki LLM requests via `AI_GATEWAY_API_KEY`, `AI_GATEWAY_CREDENTIAL`, and `AI_GATEWAY_GROUP`

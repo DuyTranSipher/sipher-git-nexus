@@ -46,6 +46,10 @@ private:
 	{
 		TArray<FString> IncludePrefixes;
 		TArray<FString> ExcludePrefixes;
+		/** Glob or regex: patterns for include (whitelist). Evaluated after prefix check. */
+		TArray<FString> IncludePatterns;
+		/** Glob or regex: patterns for exclude (blacklist). Evaluated after prefix check. */
+		TArray<FString> ExcludePatterns;
 	};
 
 	bool WriteJsonToFile(const FString& OutputJsonPath, const TSharedPtr<FJsonObject>& RootObject) const;

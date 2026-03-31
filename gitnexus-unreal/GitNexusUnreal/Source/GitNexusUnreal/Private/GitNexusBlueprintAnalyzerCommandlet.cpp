@@ -25,6 +25,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "UObject/SoftObjectPath.h"
 #include "UObject/GarbageCollection.h"
+#include "Internationalization/Regex.h"
 
 UGitNexusBlueprintAnalyzerCommandlet::UGitNexusBlueprintAnalyzerCommandlet()
 {
@@ -521,6 +522,79 @@ TArray<FString> UGitNexusBlueprintAnalyzerCommandlet::LoadCandidateAssets(const 
 	return Result;
 }
 
+// ── Pattern matching helpers ────────────────────────────────────────────────
+
+/**
+ * Recursive glob match.
+ *   *   matches any sequence of non-separator characters
+ *   **  matches any sequence of characters including /
+ *   ?   matches any single non-separator character
+ * Both Path and Pat must already be uppercased for case-insensitive matching.
+ */
+static bool GlobMatchImpl(const TCHAR* Path, const TCHAR* Pat)
+{
+	while (*Pat)
+	{
+		if (Pat[0] == TEXT('*') && Pat[1] == TEXT('*'))
+		{
+			Pat += 2;
+			if (*Pat == TEXT('/')) ++Pat; // consume optional separator after **
+			if (!*Pat) return true;       // ** at end matches everything remaining
+			// Try matching the rest of the pattern at every position in Path
+			do {
+				if (GlobMatchImpl(Path, Pat)) return true;
+			} while (*Path++);
+			return false;
+		}
+		if (*Pat == TEXT('*'))
+		{
+			++Pat;
+			// * does not cross path separators
+			while (*Path && *Path != TEXT('/'))
+			{
+				if (GlobMatchImpl(Path++, Pat)) return true;
+			}
+			return GlobMatchImpl(Path, Pat);
+		}
+		if (*Pat == TEXT('?'))
+		{
+			if (!*Path || *Path == TEXT('/')) return false;
+			++Path; ++Pat;
+		}
+		else
+		{
+			if (*Path != *Pat) return false;
+			++Path; ++Pat;
+		}
+	}
+	return !*Path;
+}
+
+/** Case-insensitive glob match of a full Unreal package path against a pattern. */
+static bool GlobMatches(const FString& Path, const FString& Pattern)
+{
+	return GlobMatchImpl(*Path.ToUpper(), *Pattern.ToUpper());
+}
+
+/**
+ * Match a package path against a single pattern entry.
+ * Patterns starting with "regex:" use FRegexMatcher (partial match — anchor with ^ and $ for full match).
+ * All other patterns use glob matching (* / ** / ?).
+ */
+static bool MatchesPattern(const FString& PackagePath, const FString& Pattern)
+{
+	if (Pattern.StartsWith(TEXT("regex:")))
+	{
+		const FString RegexStr = Pattern.Mid(6); // strip "regex:" prefix
+		const FRegexPattern RegexPattern(RegexStr);
+		FRegexMatcher Matcher(RegexPattern, PackagePath);
+		return Matcher.FindNext();
+	}
+	return GlobMatches(PackagePath, Pattern);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+
 UGitNexusBlueprintAnalyzerCommandlet::FFilterPrefixes
 UGitNexusBlueprintAnalyzerCommandlet::LoadFilterPrefixes(const FString& FilterJsonPath) const
 {
@@ -572,13 +646,49 @@ UGitNexusBlueprintAnalyzerCommandlet::LoadFilterPrefixes(const FString& FilterJs
 		}
 	}
 
+	// Read include_patterns (glob or regex: whitelist patterns)
+	const TArray<TSharedPtr<FJsonValue>>* IncludePatternValues = nullptr;
+	if (RootObject->TryGetArrayField(TEXT("include_patterns"), IncludePatternValues) && IncludePatternValues)
+	{
+		for (const TSharedPtr<FJsonValue>& Value : *IncludePatternValues)
+		{
+			FString Pattern;
+			if (Value.IsValid() && Value->TryGetString(Pattern))
+			{
+				Result.IncludePatterns.Add(Pattern);
+			}
+		}
+	}
+
+	// Read exclude_patterns (glob or regex: blacklist patterns)
+	const TArray<TSharedPtr<FJsonValue>>* ExcludePatternValues = nullptr;
+	if (RootObject->TryGetArrayField(TEXT("exclude_patterns"), ExcludePatternValues) && ExcludePatternValues)
+	{
+		for (const TSharedPtr<FJsonValue>& Value : *ExcludePatternValues)
+		{
+			FString Pattern;
+			if (Value.IsValid() && Value->TryGetString(Pattern))
+			{
+				Result.ExcludePatterns.Add(Pattern);
+			}
+		}
+	}
+
 	if (Result.IncludePrefixes.Num() > 0)
 	{
 		UE_LOG(LogTemp, Display, TEXT("GitNexusBlueprintAnalyzer: Loaded %d include prefixes (whitelist)"), Result.IncludePrefixes.Num());
 	}
+	if (Result.IncludePatterns.Num() > 0)
+	{
+		UE_LOG(LogTemp, Display, TEXT("GitNexusBlueprintAnalyzer: Loaded %d include patterns (whitelist)"), Result.IncludePatterns.Num());
+	}
 	if (Result.ExcludePrefixes.Num() > 0)
 	{
 		UE_LOG(LogTemp, Display, TEXT("GitNexusBlueprintAnalyzer: Loaded %d exclude prefixes"), Result.ExcludePrefixes.Num());
+	}
+	if (Result.ExcludePatterns.Num() > 0)
+	{
+		UE_LOG(LogTemp, Display, TEXT("GitNexusBlueprintAnalyzer: Loaded %d exclude patterns"), Result.ExcludePatterns.Num());
 	}
 
 	return Result;
@@ -597,8 +707,8 @@ TArray<FAssetData> UGitNexusBlueprintAnalyzerCommandlet::GetAllBlueprintAssets(c
 	TArray<FAssetData> AllAssets;
 	AssetRegistry.GetAssets(Filter, AllAssets);
 
-	const bool bHasIncludes = Filters.IncludePrefixes.Num() > 0;
-	const bool bHasExcludes = Filters.ExcludePrefixes.Num() > 0;
+	const bool bHasIncludes = Filters.IncludePrefixes.Num() > 0 || Filters.IncludePatterns.Num() > 0;
+	const bool bHasExcludes = Filters.ExcludePrefixes.Num() > 0 || Filters.ExcludePatterns.Num() > 0;
 
 	if (!bHasIncludes && !bHasExcludes)
 	{
@@ -613,7 +723,7 @@ TArray<FAssetData> UGitNexusBlueprintAnalyzerCommandlet::GetAllBlueprintAssets(c
 	{
 		const FString PackagePath = Asset.PackageName.ToString();
 
-		// Include filter (whitelist): if set, asset MUST match at least one prefix
+		// Include filter (whitelist): asset MUST match at least one prefix or pattern
 		if (bHasIncludes)
 		{
 			bool bIncluded = false;
@@ -627,12 +737,23 @@ TArray<FAssetData> UGitNexusBlueprintAnalyzerCommandlet::GetAllBlueprintAssets(c
 			}
 			if (!bIncluded)
 			{
+				for (const FString& Pattern : Filters.IncludePatterns)
+				{
+					if (MatchesPattern(PackagePath, Pattern))
+					{
+						bIncluded = true;
+						break;
+					}
+				}
+			}
+			if (!bIncluded)
+			{
 				IncludedCount++;
 				continue;
 			}
 		}
 
-		// Exclude filter (blacklist): skip assets matching any prefix
+		// Exclude filter (blacklist): skip assets matching any prefix or pattern
 		if (bHasExcludes)
 		{
 			bool bExcluded = false;
@@ -642,6 +763,17 @@ TArray<FAssetData> UGitNexusBlueprintAnalyzerCommandlet::GetAllBlueprintAssets(c
 				{
 					bExcluded = true;
 					break;
+				}
+			}
+			if (!bExcluded)
+			{
+				for (const FString& Pattern : Filters.ExcludePatterns)
+				{
+					if (MatchesPattern(PackagePath, Pattern))
+					{
+						bExcluded = true;
+						break;
+					}
 				}
 			}
 			if (bExcluded)

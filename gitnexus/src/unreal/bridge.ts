@@ -96,6 +96,13 @@ async function readOutputJson<T>(outputPath: string, stdout: string): Promise<T>
 interface FilterPrefixes {
   include_prefixes: string[];
   exclude_prefixes: string[];
+  include_patterns: string[];
+  exclude_patterns: string[];
+}
+
+/** Returns true if the value should be treated as a glob or regex pattern rather than a plain prefix. */
+function isGlobOrRegex(s: string): boolean {
+  return s.startsWith('regex:') || /[*?[]/.test(s);
 }
 
 /**
@@ -103,6 +110,8 @@ interface FilterPrefixes {
  * Accepts both filesystem paths (Content/X, Plugins/X) and Unreal paths (/Game/X).
  */
 function toUnrealPrefix(p: string): string {
+  // Preserve regex patterns — do not transform the expression
+  if (p.startsWith('regex:')) return p;
   // Strip trailing slashes
   const cleaned = p.replace(/\/+$/, '');
   // Already an Unreal package path
@@ -137,18 +146,22 @@ async function buildFilterPrefixes(
 ): Promise<FilterPrefixes> {
   const include_prefixes: string[] = [];
   const exclude_prefixes: string[] = [];
+  const include_patterns: string[] = [];
+  const exclude_patterns: string[] = [];
 
-  // Add explicit include_paths (whitelist) — auto-convert filesystem paths
+  // Add explicit include_paths (whitelist) — route to prefix or pattern bucket
   if (config.include_paths && Array.isArray(config.include_paths)) {
     for (const p of config.include_paths) {
-      include_prefixes.push(toUnrealPrefix(p));
+      const converted = toUnrealPrefix(p);
+      (isGlobOrRegex(converted) ? include_patterns : include_prefixes).push(converted);
     }
   }
 
-  // Add explicit exclude_paths — auto-convert filesystem paths
+  // Add explicit exclude_paths — route to prefix or pattern bucket
   if (config.exclude_paths && Array.isArray(config.exclude_paths)) {
     for (const p of config.exclude_paths) {
-      exclude_prefixes.push(toUnrealPrefix(p));
+      const converted = toUnrealPrefix(p);
+      (isGlobOrRegex(converted) ? exclude_patterns : exclude_prefixes).push(converted);
     }
   }
 
@@ -185,7 +198,7 @@ async function buildFilterPrefixes(
     }
   }
 
-  return { include_prefixes, exclude_prefixes };
+  return { include_prefixes, exclude_prefixes, include_patterns, exclude_patterns };
 }
 
 export async function syncUnrealAssetManifest(
@@ -203,7 +216,8 @@ export async function syncUnrealAssetManifest(
 
   // Build and pass filter prefixes (include + exclude)
   const filters = await buildFilterPrefixes(repoPath, config);
-  if (filters.include_prefixes.length > 0 || filters.exclude_prefixes.length > 0) {
+  if (filters.include_prefixes.length > 0 || filters.exclude_prefixes.length > 0 ||
+      filters.include_patterns.length > 0 || filters.exclude_patterns.length > 0) {
     const filterJsonPath = path.join(unrealPaths.requests_dir, `filter-${randomUUID()}.json`);
     await fs.writeFile(filterJsonPath, JSON.stringify(filters), 'utf-8');
     args.push(`-FilterJson=${filterJsonPath}`);

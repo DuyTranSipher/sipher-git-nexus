@@ -21,9 +21,20 @@ export interface UnrealConfig {
   timeout_ms?: number;
   working_directory?: string;
   extra_args?: string[];
-  /** Unreal package path prefixes to exclude from sync (e.g., "/Game/ThirdParty", "/SomePlugin") */
+  /**
+   * Paths to exclude from sync. Accepts:
+   *   - Unreal package path prefixes: "/Game/ThirdParty", "/SomePlugin"
+   *   - Filesystem-relative paths: "Content/ThirdParty" (auto-converted to "/Game/ThirdParty")
+   *   - Glob patterns: "/Game/**\/ST_*", "Content/**\/ThirdParty\/**"
+   *     (* = non-separator chars, ** = any chars including /)
+   *   - Regex patterns: "regex:/Game/ST_" (partial match; use ^ and $ to anchor)
+   */
   exclude_paths?: string[];
-  /** Unreal package path prefixes to include (whitelist). If set, ONLY assets under these prefixes are scanned. */
+  /**
+   * Paths to include (whitelist). If set, ONLY assets matching these entries are scanned.
+   * Accepts the same formats as exclude_paths: prefixes, filesystem paths,
+   * glob patterns ("**\/ST_*"), or "regex:" patterns.
+   */
   include_paths?: string[];
 }
 

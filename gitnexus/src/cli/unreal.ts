@@ -141,13 +141,21 @@ export async function unrealSyncCommand(options?: {
     process.exit(1);
   }
 
-  console.log(`Syncing Unreal Blueprint assets (${mode} mode)...`);
-
   const { syncUnrealAssetManifest } = await import('../unreal/bridge.js');
-  const result = await syncUnrealAssetManifest(storagePath, config, gitRoot, options?.deep);
+  const { withUnrealProgress } = await import('./unreal-progress.js');
+
+  const result = await withUnrealProgress(
+    () => syncUnrealAssetManifest(storagePath, config, gitRoot, options?.deep),
+    {
+      phaseLabel: `Syncing Unreal Blueprint assets (${mode} mode)`,
+      successLabel: 'Sync complete',
+      failLabel: 'Sync failed',
+      isError: (r) => r.status === 'error',
+    },
+  );
 
   if (result.status === 'error') {
-    console.error(`\nError: ${result.error}`);
+    console.error(`Error: ${result.error}`);
     if (result.warnings?.length) {
       for (const w of result.warnings) {
         console.error(`  Warning: ${w}`);
@@ -156,7 +164,7 @@ export async function unrealSyncCommand(options?: {
     process.exit(1);
   }
 
-  console.log('\nSync complete:');
+  console.log('');
   console.log(`  Assets:   ${result.asset_count?.toLocaleString() ?? 0}`);
   console.log(`  Mode:     ${mode}`);
   if (result.skipped_count != null && result.skipped_count > 0) {

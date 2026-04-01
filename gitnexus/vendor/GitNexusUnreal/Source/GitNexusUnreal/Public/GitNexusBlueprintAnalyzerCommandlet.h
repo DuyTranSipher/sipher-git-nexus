@@ -20,9 +20,9 @@ public:
 
 private:
 	// ── SyncAssets ────────────────────────────────────────────────────────
-	int32 RunSyncAssets(const FString& OutputJsonPath, const FString& FilterJsonPath, bool bDeepMode);
+	int32 RunSyncAssets(const FString& OutputJsonPath, const FString& FilterJsonPath, bool bDeepMode, const FString& KnownAssetsJsonPath);
 	int32 RunSyncAssetsMetadata(const FString& OutputJsonPath, const TArray<FAssetData>& Assets);
-	int32 RunSyncAssetsDeep(const FString& OutputJsonPath, const TArray<FAssetData>& Assets);
+	int32 RunSyncAssetsDeep(const FString& OutputJsonPath, const TArray<FAssetData>& Assets, const TMap<FString, FString>& KnownAssets);
 
 	// ── Other operations ─────────────────────────────────────────────────
 	int32 RunFindNativeBlueprintReferences(
@@ -55,6 +55,8 @@ private:
 	bool WriteJsonToFile(const FString& OutputJsonPath, const TSharedPtr<FJsonObject>& RootObject) const;
 	TArray<FString> LoadCandidateAssets(const FString& CandidatesJsonPath) const;
 	FFilterPrefixes LoadFilterPrefixes(const FString& FilterJsonPath) const;
+	TMap<FString, FString> LoadKnownAssets(const FString& KnownAssetsJsonPath) const;
+	static FString GetAssetFileModifiedAt(const FAssetData& AssetData);
 	TArray<FAssetData> GetAllBlueprintAssets(const FFilterPrefixes& Filters = FFilterPrefixes()) const;
 	UBlueprint* LoadBlueprintFromAssetPath(const FString& AssetPath) const;
 	void CollectBlueprintGraphs(UBlueprint* Blueprint, TArray<UEdGraph*>& OutGraphs) const;

@@ -60,7 +60,9 @@ int32 UGitNexusBlueprintAnalyzerCommandlet::Main(const FString& Params)
 		FString ModeStr;
 		FParse::Value(*Params, TEXT("Mode="), ModeStr);
 		const bool bDeepMode = ModeStr.Equals(TEXT("deep"), ESearchCase::IgnoreCase);
-		return RunSyncAssets(OutputJsonPath, FilterJsonPath, bDeepMode);
+		FString KnownAssetsJsonPath;
+		FParse::Value(*Params, TEXT("KnownAssetsJson="), KnownAssetsJsonPath);
+		return RunSyncAssets(OutputJsonPath, FilterJsonPath, bDeepMode, KnownAssetsJsonPath);
 	}
 
 	if (Operation.Equals(TEXT("FindNativeBlueprintReferences"), ESearchCase::IgnoreCase))
@@ -98,15 +100,24 @@ int32 UGitNexusBlueprintAnalyzerCommandlet::Main(const FString& Params)
 int32 UGitNexusBlueprintAnalyzerCommandlet::RunSyncAssets(
 	const FString& OutputJsonPath,
 	const FString& FilterJsonPath,
-	bool bDeepMode)
+	bool bDeepMode,
+	const FString& KnownAssetsJsonPath)
 {
 	const FFilterPrefixes Filters = LoadFilterPrefixes(FilterJsonPath);
 	const TArray<FAssetData> Assets = GetAllBlueprintAssets(Filters);
 
 	if (bDeepMode)
 	{
-		UE_LOG(LogTemp, Display, TEXT("GitNexusBlueprintAnalyzer: Running in DEEP mode (full Blueprint loading)"));
-		return RunSyncAssetsDeep(OutputJsonPath, Assets);
+		const TMap<FString, FString> KnownAssets = LoadKnownAssets(KnownAssetsJsonPath);
+		if (KnownAssets.Num() > 0)
+		{
+			UE_LOG(LogTemp, Display, TEXT("GitNexusBlueprintAnalyzer: Running in DEEP mode (incremental — %d known assets, unchanged will be skipped)"), KnownAssets.Num());
+		}
+		else
+		{
+			UE_LOG(LogTemp, Display, TEXT("GitNexusBlueprintAnalyzer: Running in DEEP mode (full Blueprint loading)"));
+		}
+		return RunSyncAssetsDeep(OutputJsonPath, Assets, KnownAssets);
 	}
 
 	UE_LOG(LogTemp, Display, TEXT("GitNexusBlueprintAnalyzer: Running in METADATA mode (no asset loading)"));
@@ -187,6 +198,13 @@ int32 UGitNexusBlueprintAnalyzerCommandlet::RunSyncAssetsMetadata(
 		// native_function_refs not available in metadata mode
 		AssetObject->SetArrayField(TEXT("native_function_refs"), TArray<TSharedPtr<FJsonValue>>());
 
+		// File modification timestamp for incremental change detection
+		const FString FileModifiedAt = GetAssetFileModifiedAt(AssetData);
+		if (!FileModifiedAt.IsEmpty())
+		{
+			AssetObject->SetStringField(TEXT("file_modified_at"), FileModifiedAt);
+		}
+
 		AssetValues.Add(MakeShared<FJsonValueObject>(AssetObject));
 	}
 
@@ -210,15 +228,37 @@ static constexpr int32 DEEP_BATCH_SIZE = 50;
 
 int32 UGitNexusBlueprintAnalyzerCommandlet::RunSyncAssetsDeep(
 	const FString& OutputJsonPath,
-	const TArray<FAssetData>& Assets)
+	const TArray<FAssetData>& Assets,
+	const TMap<FString, FString>& KnownAssets)
 {
 	TArray<TSharedPtr<FJsonValue>> AssetValues;
+	TArray<TSharedPtr<FJsonValue>> SkippedPathValues;
 	int32 SkippedCount = 0;
+	int32 ChangedCount = 0;
 	int32 BatchCounter = 0;
 
 	for (const FAssetData& AssetData : Assets)
 	{
 		const FSoftObjectPath SoftPath = AssetData.GetSoftObjectPath();
+
+		// Incremental skip: if this asset is known AND unchanged, skip loading entirely
+		if (KnownAssets.Num() > 0)
+		{
+			const FString AssetPathStr = SoftPath.ToString();
+			const FString* StoredMtime = KnownAssets.Find(AssetPathStr);
+			if (StoredMtime)
+			{
+				const FString CurrentMtime = GetAssetFileModifiedAt(AssetData);
+				if (!CurrentMtime.IsEmpty() && CurrentMtime == *StoredMtime)
+				{
+					// File unchanged — skip loading
+					SkippedPathValues.Add(MakeShared<FJsonValueString>(AssetPathStr));
+					continue;
+				}
+				// File changed — re-index
+				ChangedCount++;
+			}
+		}
 		UObject* LoadedAsset = SoftPath.TryLoad();
 		UBlueprint* Blueprint = LoadedAsset ? Cast<UBlueprint>(LoadedAsset) : nullptr;
 		if (!LoadedAsset)
@@ -238,6 +278,11 @@ int32 UGitNexusBlueprintAnalyzerCommandlet::RunSyncAssetsDeep(
 			for (const FName& Dep : Deps)
 				DepValues.Add(MakeShared<FJsonValueString>(Dep.ToString()));
 			AssetObject->SetArrayField(TEXT("dependencies"), DepValues);
+			const FString NonBpMtime = GetAssetFileModifiedAt(AssetData);
+			if (!NonBpMtime.IsEmpty())
+			{
+				AssetObject->SetStringField(TEXT("file_modified_at"), NonBpMtime);
+			}
 			AssetValues.Add(MakeShared<FJsonValueObject>(AssetObject));
 			continue;
 		}
@@ -307,6 +352,13 @@ int32 UGitNexusBlueprintAnalyzerCommandlet::RunSyncAssetsDeep(
 		}
 		AssetObject->SetArrayField(TEXT("native_function_refs"), NativeFunctionRefValues);
 
+		// File modification timestamp for incremental change detection
+		const FString FileModifiedAt = GetAssetFileModifiedAt(AssetData);
+		if (!FileModifiedAt.IsEmpty())
+		{
+			AssetObject->SetStringField(TEXT("file_modified_at"), FileModifiedAt);
+		}
+
 		AssetValues.Add(MakeShared<FJsonValueObject>(AssetObject));
 
 		// Batch GC to prevent OOM on large projects
@@ -323,6 +375,10 @@ int32 UGitNexusBlueprintAnalyzerCommandlet::RunSyncAssetsDeep(
 	{
 		UE_LOG(LogTemp, Warning, TEXT("GitNexusBlueprintAnalyzer: %d assets skipped (failed to load)"), SkippedCount);
 	}
+	if (SkippedPathValues.Num() > 0)
+	{
+		UE_LOG(LogTemp, Display, TEXT("GitNexusBlueprintAnalyzer: %d unchanged assets skipped, %d changed assets re-indexed (incremental)"), SkippedPathValues.Num(), ChangedCount);
+	}
 	UE_LOG(LogTemp, Display, TEXT("GitNexusBlueprintAnalyzer: %d assets indexed (deep mode)"), AssetValues.Num());
 
 	TSharedPtr<FJsonObject> RootObject = MakeShared<FJsonObject>();
@@ -331,6 +387,10 @@ int32 UGitNexusBlueprintAnalyzerCommandlet::RunSyncAssetsDeep(
 	RootObject->SetStringField(TEXT("project_path"), FPaths::ConvertRelativePathToFull(FPaths::GetProjectFilePath()));
 	RootObject->SetStringField(TEXT("mode"), TEXT("deep"));
 	RootObject->SetArrayField(TEXT("assets"), AssetValues);
+	if (SkippedPathValues.Num() > 0)
+	{
+		RootObject->SetArrayField(TEXT("skipped_paths"), SkippedPathValues);
+	}
 
 	return WriteJsonToFile(OutputJsonPath, RootObject) ? 0 : 1;
 }
@@ -709,6 +769,62 @@ UGitNexusBlueprintAnalyzerCommandlet::LoadFilterPrefixes(const FString& FilterJs
 	}
 
 	return Result;
+}
+
+TMap<FString, FString> UGitNexusBlueprintAnalyzerCommandlet::LoadKnownAssets(const FString& KnownAssetsJsonPath) const
+{
+	TMap<FString, FString> Result;
+	if (KnownAssetsJsonPath.IsEmpty())
+	{
+		return Result;
+	}
+
+	FString RawJson;
+	if (!FFileHelper::LoadFileToString(RawJson, *KnownAssetsJsonPath))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("GitNexusBlueprintAnalyzer: Could not read known assets file: %s"), *KnownAssetsJsonPath);
+		return Result;
+	}
+
+	TSharedPtr<FJsonObject> RootObject;
+	const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(RawJson);
+	if (!FJsonSerializer::Deserialize(Reader, RootObject) || !RootObject.IsValid())
+	{
+		return Result;
+	}
+
+	// Format: { "known_assets": { "/Game/X.X": "2026-04-01T08:00:00Z", ... } }
+	const TSharedPtr<FJsonObject>* KnownAssetsObj = nullptr;
+	if (RootObject->TryGetObjectField(TEXT("known_assets"), KnownAssetsObj) && KnownAssetsObj && KnownAssetsObj->IsValid())
+	{
+		for (const auto& Pair : (*KnownAssetsObj)->Values)
+		{
+			FString Mtime;
+			if (Pair.Value.IsValid() && Pair.Value->TryGetString(Mtime))
+			{
+				Result.Add(Pair.Key, Mtime);
+			}
+		}
+	}
+
+	return Result;
+}
+
+FString UGitNexusBlueprintAnalyzerCommandlet::GetAssetFileModifiedAt(const FAssetData& AssetData)
+{
+	FString FilePath;
+	if (FPackageName::TryConvertLongPackageNameToFilename(
+			AssetData.PackageName.ToString(),
+			FilePath,
+			FPackageName::GetAssetPackageExtension()))
+	{
+		const FDateTime Timestamp = IFileManager::Get().GetTimeStamp(*FilePath);
+		if (Timestamp != FDateTime::MinValue())
+		{
+			return Timestamp.ToIso8601();
+		}
+	}
+	return FString();
 }
 
 TArray<FAssetData> UGitNexusBlueprintAnalyzerCommandlet::GetAllBlueprintAssets(const FFilterPrefixes& Filters) const

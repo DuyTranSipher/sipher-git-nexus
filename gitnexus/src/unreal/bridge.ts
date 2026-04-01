@@ -3,7 +3,7 @@ import path from 'path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
-import { ensureUnrealStorage, saveUnrealAssetManifest } from './config.js';
+import { ensureUnrealStorage, loadUnrealAssetManifest, saveUnrealAssetManifest } from './config.js';
 import { loadIgnoreRules } from '../config/ignore-service.js';
 import type {
   ExpandBlueprintChainResult,
@@ -11,11 +11,13 @@ import type {
   NativeFunctionTarget,
   SyncUnrealAssetManifestResult,
   UnrealAssetManifest,
+  UnrealAssetManifestAsset,
   UnrealAnalyzerExpandChainResponse,
   UnrealAnalyzerFindRefsResponse,
   UnrealBlueprintCandidate,
   UnrealConfig,
   UnrealStoragePaths,
+  UnrealSyncCommandletResponse,
 } from './types.js';
 
 const execFileAsync = promisify(execFile);
@@ -214,6 +216,25 @@ export async function syncUnrealAssetManifest(
   // Pass scan mode: metadata (default, zero loading) or deep (full Blueprint loading)
   args.push(`-Mode=${deep ? 'deep' : 'metadata'}`);
 
+  // Incremental deep sync: load existing manifest to skip unchanged assets
+  let oldAssetsByPath: Map<string, UnrealAssetManifestAsset> | undefined;
+  if (deep) {
+    const existing = await loadUnrealAssetManifest(storagePath);
+    if (existing && existing.assets.length > 0) {
+      oldAssetsByPath = new Map(existing.assets.map(a => [a.asset_path, a]));
+      // Build known_assets map: { asset_path: file_modified_at } for mtime-based change detection
+      const knownAssets: Record<string, string> = {};
+      for (const asset of existing.assets) {
+        if (asset.file_modified_at) {
+          knownAssets[asset.asset_path] = asset.file_modified_at;
+        }
+      }
+      const knownJsonPath = path.join(unrealPaths.requests_dir, `known-${randomUUID()}.json`);
+      await fs.writeFile(knownJsonPath, JSON.stringify({ known_assets: knownAssets }), 'utf-8');
+      args.push(`-KnownAssetsJson=${knownJsonPath}`);
+    }
+  }
+
   // Build and pass filter prefixes (include + exclude)
   const filters = await buildFilterPrefixes(repoPath, config);
   if (filters.include_prefixes.length > 0 || filters.exclude_prefixes.length > 0 ||
@@ -225,29 +246,40 @@ export async function syncUnrealAssetManifest(
 
   try {
     const { stdout } = await runCommand(config, 'SyncAssets', args);
-    const manifest = await readOutputJson<UnrealAssetManifest>(outputPath, stdout);
+    const response = await readOutputJson<UnrealSyncCommandletResponse>(outputPath, stdout);
+
+    // Merge old entries for skipped assets with newly-processed assets
+    const manifest = mergeDeepManifest(response, oldAssetsByPath);
     const manifestPath = await saveUnrealAssetManifest(storagePath, manifest);
+
+    const skippedCount = response.skipped_paths?.length ?? 0;
+    const newCount = response.assets.length;
     return {
       status: 'success',
       manifest_path: manifestPath,
       asset_count: manifest.assets.length,
       generated_at: manifest.generated_at,
       warnings: [],
+      ...(skippedCount > 0 ? { skipped_count: skippedCount, new_count: newCount } : {}),
     };
   } catch (error: any) {
     // UE may exit non-zero due to Blueprint compilation warnings even though
     // the commandlet completed and wrote valid output. Try reading the file first.
     try {
       const stdout = error?.stdout ? String(error.stdout).trim() : '';
-      const manifest = await readOutputJson<UnrealAssetManifest>(outputPath, stdout);
-      if (manifest && Array.isArray(manifest.assets) && manifest.assets.length > 0) {
+      const response = await readOutputJson<UnrealSyncCommandletResponse>(outputPath, stdout);
+      if (response && Array.isArray(response.assets) && response.assets.length > 0) {
+        const manifest = mergeDeepManifest(response, oldAssetsByPath);
         const manifestPath = await saveUnrealAssetManifest(storagePath, manifest);
+        const skippedCount = response.skipped_paths?.length ?? 0;
+        const newCount = response.assets.length;
         return {
           status: 'success',
           manifest_path: manifestPath,
           asset_count: manifest.assets.length,
           generated_at: manifest.generated_at,
           warnings: ['UE exited with non-zero code (likely Blueprint compilation warnings)'],
+          ...(skippedCount > 0 ? { skipped_count: skippedCount, new_count: newCount } : {}),
         };
       }
     } catch { /* output file not readable, fall through to error */ }
@@ -264,6 +296,33 @@ export async function syncUnrealAssetManifest(
       error: details,
     };
   }
+}
+
+/**
+ * Merge commandlet response with old manifest entries for incrementally-skipped assets.
+ * New assets come from the commandlet; skipped assets reuse their old manifest entry.
+ * Assets in the old manifest but not in the commandlet output (neither assets nor skipped_paths) are deleted.
+ */
+function mergeDeepManifest(
+  response: UnrealSyncCommandletResponse,
+  oldAssets: Map<string, UnrealAssetManifestAsset> | undefined,
+): UnrealAssetManifest {
+  const merged = [...response.assets];
+  if (oldAssets && response.skipped_paths) {
+    for (const skippedPath of response.skipped_paths) {
+      const oldEntry = oldAssets.get(skippedPath);
+      if (oldEntry) {
+        merged.push(oldEntry);
+      }
+    }
+  }
+  return {
+    version: response.version,
+    generated_at: response.generated_at,
+    project_path: response.project_path,
+    mode: response.mode,
+    assets: merged,
+  };
 }
 
 export async function findNativeBlueprintReferences(

@@ -171,7 +171,11 @@ export async function syncUnrealAssetManifestCommand(options?: {
     process.exit(1);
   }
   if (result?.asset_count != null) {
-    console.log(`  ${result.asset_count.toLocaleString()} Blueprint assets indexed (${mode} mode)`);
+    let summary = `  ${result.asset_count.toLocaleString()} Blueprint assets indexed (${mode} mode)`;
+    if (result.skipped_count != null && result.skipped_count > 0) {
+      summary += ` — ${result.new_count ?? 0} new, ${result.skipped_count} skipped`;
+    }
+    console.log(summary);
     if (result.manifest_path) console.log(`  ${result.manifest_path}`);
   }
   output(result);

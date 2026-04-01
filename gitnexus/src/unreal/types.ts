@@ -5,13 +5,22 @@ export interface UnrealAssetManifestAsset {
   native_parents?: string[];
   native_function_refs?: string[];
   dependencies?: string[];
+  /** ISO timestamp of the .uasset file's last modification time. Used for incremental change detection. */
+  file_modified_at?: string;
 }
 
 export interface UnrealAssetManifest {
   version: number;
   generated_at: string;
   project_path?: string;
+  mode?: 'metadata' | 'deep';
   assets: UnrealAssetManifestAsset[];
+}
+
+/** Raw commandlet output for SyncAssets — extends manifest with incremental skip data. */
+export interface UnrealSyncCommandletResponse extends UnrealAssetManifest {
+  /** Asset paths that were skipped because they were in the known_paths list (deep mode only). */
+  skipped_paths?: string[];
 }
 
 export interface UnrealConfig {
@@ -126,6 +135,10 @@ export interface SyncUnrealAssetManifestResult {
   generated_at?: string;
   warnings?: string[];
   error?: string;
+  /** Number of assets skipped during incremental deep sync. */
+  skipped_count?: number;
+  /** Number of newly-processed assets during incremental deep sync. */
+  new_count?: number;
 }
 
 export interface FindNativeBlueprintReferencesResult {

@@ -34,7 +34,14 @@ export type NodeLabel =
   | 'Constructor'
   | 'Template'
   // Unreal Engine Blueprint assets
-  | 'Blueprint';
+  | 'Blueprint'
+  | 'AnimBlueprint'
+  | 'WidgetBlueprint'
+  | 'GameplayAbility'
+  | 'GameplayEffect'
+  | 'StateTree'
+  | 'DataTable'
+  | 'DataAsset';
 
 
 import { SupportedLanguages } from '../../config/supported-languages.js';
@@ -62,6 +69,8 @@ export type NodeProperties = {
   communities?: string[],
   entryPointId?: string,
   terminalId?: string,
+  /** Unreal Engine asset class path (e.g. "/Script/Engine.AnimBlueprint") */
+  ueAssetClass?: string,
   // Entry point scoring (computed by process detection)
   entryPointScore?: number,
   entryPointReason?: string,

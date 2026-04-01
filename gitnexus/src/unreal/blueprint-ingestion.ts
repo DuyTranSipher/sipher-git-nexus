@@ -8,7 +8,7 @@
 
 import fs from 'fs/promises';
 import path from 'path';
-import { KnowledgeGraph, GraphNode } from '../core/graph/types.js';
+import { KnowledgeGraph, GraphNode, NodeLabel } from '../core/graph/types.js';
 import { generateId } from '../lib/utils.js';
 import { shouldIgnorePath, loadIgnoreRules } from '../config/ignore-service.js';
 import type { UnrealAssetManifest } from './types.js';
@@ -38,6 +38,31 @@ const extractClassName = (unrealPath: string): string => {
   if (dotIdx >= 0) return unrealPath.slice(dotIdx + 1);
   const slashIdx = unrealPath.lastIndexOf('/');
   return slashIdx >= 0 ? unrealPath.slice(slashIdx + 1) : unrealPath;
+};
+
+/** Map an Unreal asset class path to a typed NodeLabel.
+ *  Falls back to 'Blueprint' for unknown/missing asset classes. */
+const assetClassToLabel = (assetClass?: string): NodeLabel => {
+  if (!assetClass) return 'Blueprint';
+  // Extract class name from path: "/Script/Engine.AnimBlueprint" → "AnimBlueprint"
+  const dot = assetClass.lastIndexOf('.');
+  const className = dot >= 0 ? assetClass.slice(dot + 1) : assetClass;
+
+  const LABEL_MAP: Record<string, NodeLabel> = {
+    'AnimBlueprint': 'AnimBlueprint',
+    'WidgetBlueprint': 'WidgetBlueprint',
+    'GameplayAbilityBlueprint': 'GameplayAbility',
+    'GameplayAbility': 'GameplayAbility',
+    'GameplayEffectBlueprint': 'GameplayEffect',
+    'GameplayEffect': 'GameplayEffect',
+    'StateTree': 'StateTree',
+    'DataTable': 'DataTable',
+    'DataAsset': 'DataAsset',
+    // Common subclasses that should map to the parent type
+    'PrimaryDataAsset': 'DataAsset',
+  };
+
+  return LABEL_MAP[className] || 'Blueprint';
 };
 
 /**
@@ -151,15 +176,17 @@ export const ingestBlueprintsIntoGraph = async (
     const bpId = generateId('Blueprint', asset.asset_path);
     const bpName = extractAssetName(asset.asset_path);
 
+    const label = assetClassToLabel(asset.asset_class);
     graph.addNode({
       id: bpId,
-      label: 'Blueprint',
+      label,
       properties: {
         name: bpName,
         filePath: asset.asset_path,
         startLine: -1,
         endLine: -1,
         description: asset.generated_class || '',
+        ueAssetClass: asset.asset_class,
       },
     });
     nodesAdded++;

@@ -138,6 +138,7 @@ int32 UGitNexusBlueprintAnalyzerCommandlet::RunSyncAssetsMetadata(
 	{
 		TSharedPtr<FJsonObject> AssetObject = MakeShared<FJsonObject>();
 		AssetObject->SetStringField(TEXT("asset_path"), AssetData.GetSoftObjectPath().ToString());
+		AssetObject->SetStringField(TEXT("asset_class"), AssetData.AssetClassPath.ToString());
 
 		// GeneratedClass from tag
 		FString GeneratedClassTag;
@@ -272,6 +273,7 @@ int32 UGitNexusBlueprintAnalyzerCommandlet::RunSyncAssetsDeep(
 			// Non-Blueprint asset (e.g. UStateTree / UDataAsset): emit metadata-only entry
 			TSharedPtr<FJsonObject> AssetObject = MakeShared<FJsonObject>();
 			AssetObject->SetStringField(TEXT("asset_path"), AssetData.GetSoftObjectPath().ToString());
+			AssetObject->SetStringField(TEXT("asset_class"), AssetData.AssetClassPath.ToString());
 			TArray<FName> Deps;
 			IAssetRegistry::GetChecked().GetDependencies(AssetData.PackageName, Deps, UE::AssetRegistry::EDependencyCategory::Package);
 			TArray<TSharedPtr<FJsonValue>> DepValues;
@@ -289,6 +291,7 @@ int32 UGitNexusBlueprintAnalyzerCommandlet::RunSyncAssetsDeep(
 
 		TSharedPtr<FJsonObject> AssetObject = MakeShared<FJsonObject>();
 		AssetObject->SetStringField(TEXT("asset_path"), AssetData.GetSoftObjectPath().ToString());
+		AssetObject->SetStringField(TEXT("asset_class"), AssetData.AssetClassPath.ToString());
 
 		if (Blueprint->GeneratedClass)
 		{

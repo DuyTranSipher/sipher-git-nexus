@@ -60,6 +60,7 @@ async function queryFTSViaExecutor(
  */
 export const searchFTSFromLbug = async (query: string, limit: number = 20, repoId?: string): Promise<BM25SearchResult[]> => {
   let fileResults: any[], functionResults: any[], classResults: any[], methodResults: any[], interfaceResults: any[], blueprintResults: any[];
+  let animBpResults: any[], widgetBpResults: any[], gameplayAbilityResults: any[], gameplayEffectResults: any[], stateTreeResults: any[], dataTableResults: any[], dataAssetResults: any[];
 
   if (repoId) {
     // Use MCP connection pool via dynamic import
@@ -73,6 +74,13 @@ export const searchFTSFromLbug = async (query: string, limit: number = 20, repoI
     methodResults = await queryFTSViaExecutor(executor, 'Method', 'method_fts', query, limit);
     interfaceResults = await queryFTSViaExecutor(executor, 'Interface', 'interface_fts', query, limit);
     blueprintResults = await queryFTSViaExecutor(executor, 'Blueprint', 'blueprint_fts', query, limit);
+    animBpResults = await queryFTSViaExecutor(executor, 'AnimBlueprint', 'animblueprint_fts', query, limit);
+    widgetBpResults = await queryFTSViaExecutor(executor, 'WidgetBlueprint', 'widgetblueprint_fts', query, limit);
+    gameplayAbilityResults = await queryFTSViaExecutor(executor, 'GameplayAbility', 'gameplayability_fts', query, limit);
+    gameplayEffectResults = await queryFTSViaExecutor(executor, 'GameplayEffect', 'gameplayeffect_fts', query, limit);
+    stateTreeResults = await queryFTSViaExecutor(executor, 'StateTree', 'statetree_fts', query, limit);
+    dataTableResults = await queryFTSViaExecutor(executor, 'DataTable', 'datatable_fts', query, limit);
+    dataAssetResults = await queryFTSViaExecutor(executor, 'DataAsset', 'dataasset_fts', query, limit);
   } else {
     // Use core lbug adapter (CLI / pipeline context) — also sequential for safety
     fileResults = await queryFTS('File', 'file_fts', query, limit, false).catch(() => []);
@@ -81,6 +89,13 @@ export const searchFTSFromLbug = async (query: string, limit: number = 20, repoI
     methodResults = await queryFTS('Method', 'method_fts', query, limit, false).catch(() => []);
     interfaceResults = await queryFTS('Interface', 'interface_fts', query, limit, false).catch(() => []);
     blueprintResults = await queryFTS('Blueprint', 'blueprint_fts', query, limit, false).catch(() => []);
+    animBpResults = await queryFTS('AnimBlueprint', 'animblueprint_fts', query, limit, false).catch(() => []);
+    widgetBpResults = await queryFTS('WidgetBlueprint', 'widgetblueprint_fts', query, limit, false).catch(() => []);
+    gameplayAbilityResults = await queryFTS('GameplayAbility', 'gameplayability_fts', query, limit, false).catch(() => []);
+    gameplayEffectResults = await queryFTS('GameplayEffect', 'gameplayeffect_fts', query, limit, false).catch(() => []);
+    stateTreeResults = await queryFTS('StateTree', 'statetree_fts', query, limit, false).catch(() => []);
+    dataTableResults = await queryFTS('DataTable', 'datatable_fts', query, limit, false).catch(() => []);
+    dataAssetResults = await queryFTS('DataAsset', 'dataasset_fts', query, limit, false).catch(() => []);
   }
 
   // Merge results by filePath, summing scores for same file
@@ -103,7 +118,14 @@ export const searchFTSFromLbug = async (query: string, limit: number = 20, repoI
   addResults(methodResults);
   addResults(interfaceResults);
   addResults(blueprintResults);
-  
+  addResults(animBpResults);
+  addResults(widgetBpResults);
+  addResults(gameplayAbilityResults);
+  addResults(gameplayEffectResults);
+  addResults(stateTreeResults);
+  addResults(dataTableResults);
+  addResults(dataAssetResults);
+
   // Sort by score descending and add rank
   const sorted = Array.from(merged.values())
     .sort((a, b) => b.score - a.score)

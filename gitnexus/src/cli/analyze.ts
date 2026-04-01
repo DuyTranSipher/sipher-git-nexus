@@ -215,6 +215,16 @@ export const analyzeCommand = async (
     const bpResult = await ingestBlueprintsIntoGraph(pipelineResult.graph, storagePath, repoPath);
     if (bpResult.nodesAdded > 0) {
       updateBar(61, `Indexed ${bpResult.nodesAdded} Blueprints (${bpResult.edgesAdded} edges)`);
+    } else {
+      // Check if this might be an Unreal project
+      const uprojectFiles = await fs.readdir(repoPath).then(
+        files => files.filter(f => f.endsWith('.uproject')),
+        () => []
+      );
+      if (uprojectFiles.length > 0) {
+        console.log('  Unreal project detected but no Blueprint assets indexed.');
+        console.log('  Run: gitnexus unreal init && gitnexus unreal sync\n');
+      }
     }
   } catch { /* non-fatal — Unreal integration is optional */ }
 
@@ -249,6 +259,13 @@ export const analyzeCommand = async (
     await createFTSIndex('Method', 'method_fts', ['name', 'content']);
     await createFTSIndex('Interface', 'interface_fts', ['name', 'content']);
     await createFTSIndex('Blueprint', 'blueprint_fts', ['name', 'content']);
+    await createFTSIndex('AnimBlueprint', 'animblueprint_fts', ['name', 'content']);
+    await createFTSIndex('WidgetBlueprint', 'widgetblueprint_fts', ['name', 'content']);
+    await createFTSIndex('GameplayAbility', 'gameplayability_fts', ['name', 'content']);
+    await createFTSIndex('GameplayEffect', 'gameplayeffect_fts', ['name', 'content']);
+    await createFTSIndex('StateTree', 'statetree_fts', ['name', 'content']);
+    await createFTSIndex('DataTable', 'datatable_fts', ['name', 'content']);
+    await createFTSIndex('DataAsset', 'dataasset_fts', ['name', 'content']);
   } catch (e: any) {
     // Non-fatal — FTS is best-effort
   }

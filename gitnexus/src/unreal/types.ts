@@ -1,5 +1,7 @@
 export interface UnrealAssetManifestAsset {
   asset_path: string;
+  /** Unreal asset class path from FAssetData::AssetClassPath (e.g. "/Script/Engine.AnimBlueprint") */
+  asset_class?: string;
   generated_class?: string;
   parent_class?: string;
   native_parents?: string[];

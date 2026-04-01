@@ -122,6 +122,32 @@ program
   .option('-r, --repo <name>', 'Target repository')
   .action(createLazyAction(() => import('./tool.js'), 'cypherCommand'));
 
+// ─── Unreal Engine Namespace ───────────────────────────────────────────
+
+const unrealCmd = program
+  .command('unreal')
+  .description('Unreal Engine project management');
+
+unrealCmd
+  .command('init')
+  .description('Validate UE project and configure GitNexus integration')
+  .option('--project <path>', 'UE project root (default: current directory)')
+  .option('--editor-cmd <path>', 'Path to UnrealEditor-Cmd.exe (auto-detected if omitted)')
+  .action(createLazyAction(() => import('./unreal.js'), 'unrealInitCommand'));
+
+unrealCmd
+  .command('sync')
+  .description('Sync Unreal Blueprint assets into the knowledge graph')
+  .option('--deep', 'Deep mode: fully load Blueprints for function refs (slower)')
+  .option('-r, --repo <name>', 'Target repository')
+  .action(createLazyAction(() => import('./unreal.js'), 'unrealSyncCommand'));
+
+unrealCmd
+  .command('status')
+  .description('Show Unreal asset index status and freshness')
+  .option('-r, --repo <name>', 'Target repository')
+  .action(createLazyAction(() => import('./unreal.js'), 'unrealStatusCommand'));
+
 program
   .command('unreal-sync')
   .description('Refresh the Unreal Blueprint asset manifest for the current indexed repo')

@@ -248,6 +248,7 @@ export const analyzeCommand = async (
     await createFTSIndex('Class', 'class_fts', ['name', 'content']);
     await createFTSIndex('Method', 'method_fts', ['name', 'content']);
     await createFTSIndex('Interface', 'interface_fts', ['name', 'content']);
+    await createFTSIndex('Blueprint', 'blueprint_fts', ['name', 'content']);
   } catch (e: any) {
     // Non-fatal — FTS is best-effort
   }

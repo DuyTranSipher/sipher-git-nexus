@@ -59,7 +59,7 @@ async function queryFTSViaExecutor(
  * @returns Ranked search results from FTS indexes
  */
 export const searchFTSFromLbug = async (query: string, limit: number = 20, repoId?: string): Promise<BM25SearchResult[]> => {
-  let fileResults: any[], functionResults: any[], classResults: any[], methodResults: any[], interfaceResults: any[];
+  let fileResults: any[], functionResults: any[], classResults: any[], methodResults: any[], interfaceResults: any[], blueprintResults: any[];
 
   if (repoId) {
     // Use MCP connection pool via dynamic import
@@ -72,6 +72,7 @@ export const searchFTSFromLbug = async (query: string, limit: number = 20, repoI
     classResults = await queryFTSViaExecutor(executor, 'Class', 'class_fts', query, limit);
     methodResults = await queryFTSViaExecutor(executor, 'Method', 'method_fts', query, limit);
     interfaceResults = await queryFTSViaExecutor(executor, 'Interface', 'interface_fts', query, limit);
+    blueprintResults = await queryFTSViaExecutor(executor, 'Blueprint', 'blueprint_fts', query, limit);
   } else {
     // Use core lbug adapter (CLI / pipeline context) — also sequential for safety
     fileResults = await queryFTS('File', 'file_fts', query, limit, false).catch(() => []);
@@ -79,11 +80,12 @@ export const searchFTSFromLbug = async (query: string, limit: number = 20, repoI
     classResults = await queryFTS('Class', 'class_fts', query, limit, false).catch(() => []);
     methodResults = await queryFTS('Method', 'method_fts', query, limit, false).catch(() => []);
     interfaceResults = await queryFTS('Interface', 'interface_fts', query, limit, false).catch(() => []);
+    blueprintResults = await queryFTS('Blueprint', 'blueprint_fts', query, limit, false).catch(() => []);
   }
-  
+
   // Merge results by filePath, summing scores for same file
   const merged = new Map<string, { filePath: string; score: number }>();
-  
+
   const addResults = (results: any[]) => {
     for (const r of results) {
       const existing = merged.get(r.filePath);
@@ -94,12 +96,13 @@ export const searchFTSFromLbug = async (query: string, limit: number = 20, repoI
       }
     }
   };
-  
+
   addResults(fileResults);
   addResults(functionResults);
   addResults(classResults);
   addResults(methodResults);
   addResults(interfaceResults);
+  addResults(blueprintResults);
   
   // Sort by score descending and add rank
   const sorted = Array.from(merged.values())

@@ -143,8 +143,9 @@ export const ingestBlueprintsIntoGraph = async (
   let edgesAdded = 0;
   let edgeCounter = 0;
 
-  // Track created Blueprint IDs for second-pass dependency edges
+  // Track created Blueprint IDs for second-pass dependency and inheritance edges
   const blueprintIdByAssetPath = new Map<string, string>();
+  const blueprintIdByName = new Map<string, string>();
 
   for (const asset of assets) {
     const bpId = generateId('Blueprint', asset.asset_path);
@@ -163,6 +164,7 @@ export const ingestBlueprintsIntoGraph = async (
     });
     nodesAdded++;
     blueprintIdByAssetPath.set(asset.asset_path, bpId);
+    blueprintIdByName.set(bpName, bpId);
 
     // ── EXTENDS edge to nearest native parent class ──────────────
     const nativeParents = asset.native_parents || [];
@@ -222,7 +224,39 @@ export const ingestBlueprintsIntoGraph = async (
     }
   }
 
-  // ── Second pass: Blueprint-to-Blueprint IMPORTS edges ───────────────
+  // ── Second pass: Blueprint-to-Blueprint EXTENDS edges ───────────────
+  // Uses the `parent_class` field which points to the direct parent (may be
+  // another Blueprint). The first pass already created Blueprint→C++ EXTENDS
+  // edges via `native_parents`; this pass fills the Blueprint→Blueprint gap.
+  for (const asset of assets) {
+    if (!asset.parent_class) continue;
+
+    const sourceBpId = blueprintIdByAssetPath.get(asset.asset_path);
+    if (!sourceBpId) continue;
+
+    // parent_class is a class path like "/Script/Game.ALS_Base_CharacterBP_C"
+    // or "Blueprint'/Game/Path/BP_Foo.BP_Foo_C'" — extract class name, strip _C
+    let parentName = extractClassName(asset.parent_class);
+    parentName = parentName.replace(/'$/, ''); // strip trailing quote
+    if (parentName.endsWith('_C')) {
+      parentName = parentName.slice(0, -2);
+    }
+
+    const targetBpId = blueprintIdByName.get(parentName);
+    if (targetBpId && targetBpId !== sourceBpId) {
+      graph.addRelationship({
+        id: generateId('EXTENDS', `${sourceBpId}->${targetBpId}:${edgeCounter++}`),
+        sourceId: sourceBpId,
+        targetId: targetBpId,
+        type: 'EXTENDS',
+        confidence: 0.9,
+        reason: 'blueprint-manifest',
+      });
+      edgesAdded++;
+    }
+  }
+
+  // ── Third pass: Blueprint-to-Blueprint IMPORTS edges ───────────────
   for (const asset of assets) {
     const deps = asset.dependencies || [];
     if (deps.length === 0) continue;

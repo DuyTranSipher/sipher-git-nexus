@@ -18,7 +18,8 @@ export const NODE_TABLES = [
   'Struct', 'Enum', 'Macro', 'Typedef', 'Union', 'Namespace', 'Trait', 'Impl',
   'TypeAlias', 'Const', 'Static', 'Property', 'Record', 'Delegate', 'Annotation', 'Constructor', 'Template', 'Module',
   // Unreal Engine Blueprint assets
-  'Blueprint'
+  'Blueprint', 'AnimBlueprint', 'WidgetBlueprint', 'GameplayAbility', 'GameplayEffect',
+  'StateTree', 'DataTable', 'DataAsset',
 ] as const;
 export type NodeTableName = typeof NODE_TABLES[number];
 
@@ -197,6 +198,13 @@ export const MODULE_SCHEMA = CODE_ELEMENT_BASE('Module');
 
 // Unreal Engine Blueprint assets
 export const BLUEPRINT_SCHEMA = CODE_ELEMENT_BASE('Blueprint');
+export const ANIM_BLUEPRINT_SCHEMA = CODE_ELEMENT_BASE('AnimBlueprint');
+export const WIDGET_BLUEPRINT_SCHEMA = CODE_ELEMENT_BASE('WidgetBlueprint');
+export const GAMEPLAY_ABILITY_SCHEMA = CODE_ELEMENT_BASE('GameplayAbility');
+export const GAMEPLAY_EFFECT_SCHEMA = CODE_ELEMENT_BASE('GameplayEffect');
+export const STATE_TREE_SCHEMA = CODE_ELEMENT_BASE('StateTree');
+export const DATA_TABLE_SCHEMA = CODE_ELEMENT_BASE('DataTable');
+export const DATA_ASSET_SCHEMA = CODE_ELEMENT_BASE('DataAsset');
 
 // ============================================================================
 // RELATION TABLE SCHEMA
@@ -399,6 +407,62 @@ CREATE REL TABLE ${REL_TABLE_NAME} (
   FROM \`Blueprint\` TO \`Blueprint\`,
   FROM \`Blueprint\` TO Community,
   FROM \`Blueprint\` TO Process,
+  FROM \`AnimBlueprint\` TO Class,
+  FROM \`AnimBlueprint\` TO \`Struct\`,
+  FROM \`AnimBlueprint\` TO Method,
+  FROM \`AnimBlueprint\` TO Function,
+  FROM \`AnimBlueprint\` TO \`Blueprint\`,
+  FROM \`AnimBlueprint\` TO \`AnimBlueprint\`,
+  FROM \`AnimBlueprint\` TO Community,
+  FROM \`AnimBlueprint\` TO Process,
+  FROM \`WidgetBlueprint\` TO Class,
+  FROM \`WidgetBlueprint\` TO \`Struct\`,
+  FROM \`WidgetBlueprint\` TO Method,
+  FROM \`WidgetBlueprint\` TO Function,
+  FROM \`WidgetBlueprint\` TO \`Blueprint\`,
+  FROM \`WidgetBlueprint\` TO \`WidgetBlueprint\`,
+  FROM \`WidgetBlueprint\` TO Community,
+  FROM \`WidgetBlueprint\` TO Process,
+  FROM \`GameplayAbility\` TO Class,
+  FROM \`GameplayAbility\` TO \`Struct\`,
+  FROM \`GameplayAbility\` TO Method,
+  FROM \`GameplayAbility\` TO Function,
+  FROM \`GameplayAbility\` TO \`Blueprint\`,
+  FROM \`GameplayAbility\` TO \`GameplayAbility\`,
+  FROM \`GameplayAbility\` TO Community,
+  FROM \`GameplayAbility\` TO Process,
+  FROM \`GameplayEffect\` TO Class,
+  FROM \`GameplayEffect\` TO \`Struct\`,
+  FROM \`GameplayEffect\` TO Method,
+  FROM \`GameplayEffect\` TO Function,
+  FROM \`GameplayEffect\` TO \`Blueprint\`,
+  FROM \`GameplayEffect\` TO \`GameplayEffect\`,
+  FROM \`GameplayEffect\` TO Community,
+  FROM \`GameplayEffect\` TO Process,
+  FROM \`StateTree\` TO Class,
+  FROM \`StateTree\` TO \`Struct\`,
+  FROM \`StateTree\` TO Method,
+  FROM \`StateTree\` TO Function,
+  FROM \`StateTree\` TO \`Blueprint\`,
+  FROM \`StateTree\` TO \`StateTree\`,
+  FROM \`StateTree\` TO Community,
+  FROM \`StateTree\` TO Process,
+  FROM \`DataTable\` TO Class,
+  FROM \`DataTable\` TO \`Struct\`,
+  FROM \`DataTable\` TO Method,
+  FROM \`DataTable\` TO Function,
+  FROM \`DataTable\` TO \`Blueprint\`,
+  FROM \`DataTable\` TO \`DataTable\`,
+  FROM \`DataTable\` TO Community,
+  FROM \`DataTable\` TO Process,
+  FROM \`DataAsset\` TO Class,
+  FROM \`DataAsset\` TO \`Struct\`,
+  FROM \`DataAsset\` TO Method,
+  FROM \`DataAsset\` TO Function,
+  FROM \`DataAsset\` TO \`Blueprint\`,
+  FROM \`DataAsset\` TO \`DataAsset\`,
+  FROM \`DataAsset\` TO Community,
+  FROM \`DataAsset\` TO Process,
   type STRING,
   confidence DOUBLE,
   reason STRING,
@@ -460,6 +524,13 @@ export const NODE_SCHEMA_QUERIES = [
   TEMPLATE_SCHEMA,
   MODULE_SCHEMA,
   BLUEPRINT_SCHEMA,
+  ANIM_BLUEPRINT_SCHEMA,
+  WIDGET_BLUEPRINT_SCHEMA,
+  GAMEPLAY_ABILITY_SCHEMA,
+  GAMEPLAY_EFFECT_SCHEMA,
+  STATE_TREE_SCHEMA,
+  DATA_TABLE_SCHEMA,
+  DATA_ASSET_SCHEMA,
 ];
 
 export const REL_SCHEMA_QUERIES = [

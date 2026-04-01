@@ -70,6 +70,8 @@ interface ParsedNode {
     description?: string;
     parameterCount?: number;
     returnType?: string;
+    ueSpecifiers?: string[];
+    ueMacro?: string;
   };
 }
 
@@ -483,6 +485,84 @@ function extractEloquentRelationDescription(methodNode: any): string | null {
 }
 
 // ============================================================================
+// Unreal Engine Reflection Macro Extraction
+// ============================================================================
+
+/** UE reflection macro names */
+const UE_REFLECTION_MACROS = new Set([
+  'UCLASS', 'USTRUCT', 'UINTERFACE', 'UFUNCTION', 'UPROPERTY', 'UENUM',
+]);
+
+interface UEMacroInfo {
+  macro: string;
+  specifiers: string[];
+  endLine: number;
+}
+
+/**
+ * Parse UE reflection macro specifiers from argument text.
+ * Handles: UFUNCTION(BlueprintCallable, Category="Combat", meta=(Key=Val))
+ * Returns individual specifiers like ["BlueprintCallable", "Category=Combat", "meta=(Key=Val)"]
+ */
+function parseUESpecifiers(argsText: string): string[] {
+  // Strip outer parens
+  let inner = argsText.trim();
+  if (inner.startsWith('(')) inner = inner.slice(1);
+  if (inner.endsWith(')')) inner = inner.slice(0, -1);
+  inner = inner.trim();
+  if (!inner) return [];
+
+  // Split by commas, respecting nested parens
+  const specifiers: string[] = [];
+  let depth = 0;
+  let current = '';
+  for (const ch of inner) {
+    if (ch === '(') { depth++; current += ch; }
+    else if (ch === ')') { depth--; current += ch; }
+    else if (ch === ',' && depth === 0) {
+      const trimmed = current.trim();
+      if (trimmed) specifiers.push(trimmed);
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  const last = current.trim();
+  if (last) specifiers.push(last);
+
+  // Clean up: strip quotes from key="value" → key=value
+  return specifiers.map(s => s.replace(/"/g, ''));
+}
+
+/**
+ * Pre-scan a C++ file for UE reflection macros via regex.
+ * Returns a Map from the macro's end line (0-indexed) to macro info.
+ * The following class/function/property definition is expected on endLine+1.
+ */
+function scanUEMacros(content: string): Map<number, UEMacroInfo> {
+  const macros = new Map<number, UEMacroInfo>();
+  // Match UCLASS(...), UFUNCTION(...), etc. including multi-line args
+  const pattern = /\b(UCLASS|USTRUCT|UINTERFACE|UFUNCTION|UPROPERTY|UENUM)\s*\(([^)]*(?:\([^)]*\)[^)]*)*)\)/g;
+  let match;
+  while ((match = pattern.exec(content)) !== null) {
+    const macroName = match[1];
+    const argsText = match[2];
+    // Count newlines up to end of match to get the end line (0-indexed)
+    const endOffset = match.index + match[0].length;
+    let endLine = 0;
+    for (let i = 0; i < endOffset; i++) {
+      if (content[i] === '\n') endLine++;
+    }
+    macros.set(endLine, {
+      macro: macroName,
+      specifiers: parseUESpecifiers(argsText),
+      endLine,
+    });
+  }
+  return macros;
+}
+
+// ============================================================================
 // Laravel Route Extraction (procedural AST walk)
 // ============================================================================
 
@@ -890,6 +970,11 @@ const processFileGroup = (
     result.fileCount++;
     onFileProcessed?.();
 
+    // Pre-scan C++ files for UE reflection macros (UCLASS, UFUNCTION, etc.)
+    const ueMacroMap = (language === SupportedLanguages.CPlusPlus)
+      ? scanUEMacros(file.content)
+      : undefined;
+
     // Build per-file type environment + constructor bindings in a single AST walk.
     // Constructor bindings are verified against the SymbolTable in processCallsFromExtracted.
     const typeEnv = buildTypeEnv(tree, language);
@@ -1181,6 +1266,22 @@ const processFileGroup = (
         declaredType = extractPropertyDeclaredType(definitionNode);
       }
 
+      // Look up UE reflection macro decorating this node (macro ends on previous line)
+      let ueMacro: string | undefined;
+      let ueSpecifiers: string[] | undefined;
+      if (ueMacroMap) {
+        const nodeStartLine = definitionNode ? definitionNode.startPosition.row : startLine;
+        // Check lines immediately before the definition (macro may end 1-3 lines above)
+        for (let probe = nodeStartLine - 1; probe >= Math.max(0, nodeStartLine - 3); probe--) {
+          const macro = ueMacroMap.get(probe);
+          if (macro) {
+            ueMacro = macro.macro;
+            ueSpecifiers = macro.specifiers.length > 0 ? macro.specifiers : undefined;
+            break;
+          }
+        }
+      }
+
       result.nodes.push({
         id: nodeId,
         label: nodeLabel,
@@ -1198,6 +1299,8 @@ const processFileGroup = (
           ...(description !== undefined ? { description } : {}),
           ...(parameterCount !== undefined ? { parameterCount } : {}),
           ...(returnType !== undefined ? { returnType } : {}),
+          ...(ueSpecifiers ? { ueSpecifiers } : {}),
+          ...(ueMacro ? { ueMacro } : {}),
         },
       });
 

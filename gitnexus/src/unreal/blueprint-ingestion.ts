@@ -239,13 +239,20 @@ export const ingestBlueprintsIntoGraph = async (
       // Fallback: first candidate
       if (!matched) matched = candidates[0];
 
+      // Boost confidence if the target has BlueprintCallable specifier
+      const specs = matched.properties.ueSpecifiers;
+      const isBlueprintCallable = specs?.some(s =>
+        s === 'BlueprintCallable' || s === 'BlueprintPure'
+      );
+      const confidence = isBlueprintCallable ? 1.0 : 0.8;
+
       graph.addRelationship({
         id: generateId('CALLS', `${bpId}->${matched.id}:${edgeCounter++}`),
         sourceId: bpId,
         targetId: matched.id,
         type: 'CALLS',
-        confidence: 0.8,
-        reason: 'blueprint-manifest',
+        confidence,
+        reason: isBlueprintCallable ? 'blueprint-callable' : 'blueprint-manifest',
       });
       edgesAdded++;
     }

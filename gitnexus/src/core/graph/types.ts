@@ -71,6 +71,10 @@ export type NodeProperties = {
   terminalId?: string,
   /** Unreal Engine asset class path (e.g. "/Script/Engine.AnimBlueprint") */
   ueAssetClass?: string,
+  /** UE reflection macro specifiers (e.g. ["BlueprintCallable", "Category=Combat"]) */
+  ueSpecifiers?: string[],
+  /** UE reflection macro name (e.g. "UFUNCTION", "UCLASS") */
+  ueMacro?: string,
   // Entry point scoring (computed by process detection)
   entryPointScore?: number,
   entryPointReason?: string,

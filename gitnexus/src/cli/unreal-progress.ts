@@ -1,9 +1,15 @@
 /**
  * Spinner helper for long-running Unreal CLI commands.
- * Uses braille-dot animation with elapsed time — CLI layer only.
+ * Smooth pulsing dot animation with elapsed time — CLI layer only.
  */
 
-const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+// Smooth pulse: cycle through 3 dots that light up in sequence
+const FRAMES = [
+  '\x1b[93m●\x1b[0m\x1b[38;5;240m●●\x1b[0m',  // [*] . .
+  '\x1b[38;5;240m●\x1b[0m\x1b[93m●\x1b[0m\x1b[38;5;240m●\x1b[0m',  // . [*] .
+  '\x1b[38;5;240m●●\x1b[0m\x1b[93m●\x1b[0m',  // . . [*]
+  '\x1b[38;5;240m●\x1b[0m\x1b[93m●\x1b[0m\x1b[38;5;240m●\x1b[0m',  // . [*] .
+];
 const GREEN = '\x1b[92m';
 const RED = '\x1b[91m';
 const YELLOW = '\x1b[93m';
@@ -29,18 +35,41 @@ export async function withUnrealProgress<T>(
 
   const clearLine = () => process.stdout.write('\r\x1b[2K');
 
+  const formatElapsed = (sec: number): string => {
+    if (sec < 60) return `${sec}s`;
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}m${s.toString().padStart(2, '0')}s`;
+  };
+
+  // Print the static label once, then only update the spinner + time prefix
+  const labelText = ` ${opts.phaseLabel}`;
+  let lastTimePart = '';
+
   const render = () => {
     const elapsed = Math.round((Date.now() - start) / 1000);
-    const spinner = SPINNER_FRAMES[frame % SPINNER_FRAMES.length];
-    const time = elapsed > 0 ? ` ${DIM}(${elapsed}s)${RESET}` : '';
-    clearLine();
-    process.stdout.write(`  ${YELLOW}${spinner}${RESET} ${opts.phaseLabel}...${time}`);
+    const spinner = FRAMES[frame % FRAMES.length];
+    const timePart = elapsed > 0 ? ` ${DIM}${formatElapsed(elapsed)}${RESET}` : '';
+
+    if (frame === 0) {
+      // First render: write everything
+      process.stdout.write(`  ${spinner}${labelText}${timePart}`);
+    } else {
+      // Move cursor to column 1, write spinner (cols 3-5), then skip to time position
+      const spinnerPart = `\r  ${spinner}`;
+      // Overwrite just the time at the end
+      const labelLen = labelText.length;
+      const cursorToTime = `\x1b[${3 + 3 + labelLen}G`; // 3 (indent) + 3 (dots) + label
+      const clearToEnd = '\x1b[K';
+      process.stdout.write(`${spinnerPart}${cursorToTime}${timePart}${clearToEnd}`);
+    }
+    lastTimePart = timePart;
     frame++;
   };
 
-  // Initial render + tick every 80ms for smooth animation
+  // Initial render + tick every 200ms for smooth bouncing
   render();
-  const timer = setInterval(render, 80);
+  const timer = setInterval(render, 200);
 
   const sigintHandler = () => {
     if (aborted) process.exit(1);

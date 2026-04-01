@@ -13,26 +13,54 @@ description: "Use when the user asks how code works, wants to understand archite
 - "Where is the database logic?"
 - Understanding code you haven't seen before
 
+## Routing: Name vs Concept
+
+Before starting, determine what the user gave you:
+
+| Input looks like | Example | Start with |
+|---|---|---|
+| Symbol name (PascalCase, BP_, ST_, U, A prefix) | `BP_MainCharacter`, `UCompanionComponent` | **`gitnexus_context`** (step 2) |
+| Concept or question | "how does damage work?", "AGLS traversal" | **`gitnexus_query`** (step 1) |
+
 ## Workflow
 
 ```
-1. READ gitnexus://repos                          → Discover indexed repos
-2. READ gitnexus://repo/{name}/context             → Codebase overview, check staleness
-3. gitnexus_query({query: "<what you want to understand>"})  → Find related execution flows
-4. gitnexus_context({name: "<symbol>"})            → Deep dive on specific symbol
-5. READ gitnexus://repo/{name}/process/{name}      → Trace full execution flow
+1. gitnexus_query({query: "<concept>"})              → Find related execution flows
+2. gitnexus_context({name: "<symbol>"})               → Deep dive on specific symbol
+3. READ gitnexus://repo/{name}/process/{name}         → Trace full execution flow
+4. Check Blueprint connections (see below)            → Bridge C++ ↔ Blueprint
+5. Read source files for implementation details
 ```
 
-> If step 2 says "Index is stale" → run `npx gitnexus analyze` in terminal.
+> If "Index is stale" → run `npx gitnexus analyze` in terminal.
+
+## Step 4: Blueprint Connections
+
+After finding C++ symbols, check if any Blueprint assets connect to them. This bridges the C++ ↔ Blueprint boundary that query() alone cannot cross.
+
+```cypher
+# Find Blueprints that extend or call a C++ symbol
+MATCH (b:Blueprint)-[r:CodeRelation]->(n)
+WHERE n.name = '<symbol_name>'
+RETURN b.name AS blueprint, r.type AS relationship, b.filePath AS path
+```
+
+Run this for key C++ classes/functions found in earlier steps — especially base classes (ACharacter, UActorComponent subclasses) and UFUNCTIONs. This reveals which Blueprint assets use the C++ code.
+
+To explore in the other direction (what C++ a Blueprint calls):
+```cypher
+MATCH (b:Blueprint {name: '<blueprint_name>'})-[r:CodeRelation]->(n)
+RETURN n.name AS target, r.type AS relationship, labels(n) AS type
+```
 
 ## Checklist
 
 ```
-- [ ] READ gitnexus://repo/{name}/context
-- [ ] gitnexus_query for the concept you want to understand
-- [ ] Review returned processes (execution flows)
+- [ ] Route: name → context(), concept → query()
+- [ ] gitnexus_query for the concept (if applicable)
 - [ ] gitnexus_context on key symbols for callers/callees
 - [ ] READ process resource for full execution traces
+- [ ] Check Blueprint connections for C++ symbols found
 - [ ] Read source files for implementation details
 ```
 
@@ -64,15 +92,23 @@ gitnexus_context({name: "validateUser"})
 → Processes: LoginFlow (step 2/5), TokenRefresh (step 1/3)
 ```
 
-## Example: "How does payment processing work?"
+## Example: "How does the AGLS traversal system work?"
 
 ```
-1. READ gitnexus://repo/my-app/context       → 918 symbols, 45 processes
-2. gitnexus_query({query: "payment processing"})
-   → CheckoutFlow: processPayment → validateCard → chargeStripe
-   → RefundFlow: initiateRefund → calculateRefund → processRefund
-3. gitnexus_context({name: "processPayment"})
-   → Incoming: checkoutHandler, webhookHandler
-   → Outgoing: validateCard, chargeStripe, saveTransaction
-4. Read src/payments/processor.ts for implementation details
+1. gitnexus_query({query: "AGLS traversal locomotion"})
+   → Processes: CharacterMovement, AnimationUpdate
+   → Symbols: ULocomotionComponent, TraversalAction, ...
+
+2. gitnexus_context({name: "ULocomotionComponent"})
+   → Incoming: ABaseCharacter::SetupComponents
+   → Outgoing: StartTraversal, UpdateTraversalState
+
+3. Check Blueprint connections:
+   MATCH (b:Blueprint)-[r:CodeRelation]->(n)
+   WHERE n.name = 'ULocomotionComponent'
+   RETURN b.name, r.type, b.filePath
+   → BP_MainCharacter EXTENDS ABaseCharacter
+   → BP_MainChar_AGLS EXTENDS ...
+
+4. Read source files for implementation details
 ```

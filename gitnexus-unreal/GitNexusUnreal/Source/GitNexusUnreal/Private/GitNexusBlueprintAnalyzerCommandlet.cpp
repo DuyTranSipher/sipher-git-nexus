@@ -27,6 +27,7 @@
 #include "UObject/SoftObjectPath.h"
 #include "UObject/GarbageCollection.h"
 #include "Internationalization/Regex.h"
+#include "GameplayTagContainer.h"
 
 UGitNexusBlueprintAnalyzerCommandlet::UGitNexusBlueprintAnalyzerCommandlet()
 {
@@ -420,6 +421,131 @@ int32 UGitNexusBlueprintAnalyzerCommandlet::RunSyncAssetsDeep(
 		if (DispatcherValues.Num() > 0)
 		{
 			AssetObject->SetArrayField(TEXT("event_dispatchers"), DispatcherValues);
+		}
+
+		// ── Gameplay Tags ──────────────────────────────────────────────
+		TArray<TSharedPtr<FJsonValue>> TagValues;
+		TSet<FString> SeenTags;
+		// Walk all properties in the CDO looking for FGameplayTag/FGameplayTagContainer
+		if (Blueprint->GeneratedClass)
+		{
+			UObject* CDO = Blueprint->GeneratedClass->GetDefaultObject();
+			if (CDO)
+			{
+				for (TFieldIterator<FProperty> PropIt(Blueprint->GeneratedClass); PropIt; ++PropIt)
+				{
+					FProperty* Prop = *PropIt;
+					if (const FStructProperty* StructProp = CastField<FStructProperty>(Prop))
+					{
+						if (StructProp->Struct == FGameplayTag::StaticStruct())
+						{
+							const FGameplayTag* TagPtr = StructProp->ContainerPtrToValuePtr<FGameplayTag>(CDO);
+							if (TagPtr && TagPtr->IsValid())
+							{
+								const FString TagStr = TagPtr->GetTagName().ToString();
+								if (!SeenTags.Contains(TagStr))
+								{
+									SeenTags.Add(TagStr);
+									TagValues.Add(MakeShared<FJsonValueString>(TagStr));
+								}
+							}
+						}
+						else if (StructProp->Struct == FGameplayTagContainer::StaticStruct())
+						{
+							const FGameplayTagContainer* ContainerPtr = StructProp->ContainerPtrToValuePtr<FGameplayTagContainer>(CDO);
+							if (ContainerPtr)
+							{
+								for (const FGameplayTag& Tag : *ContainerPtr)
+								{
+									if (Tag.IsValid())
+									{
+										const FString TagStr = Tag.GetTagName().ToString();
+										if (!SeenTags.Contains(TagStr))
+										{
+											SeenTags.Add(TagStr);
+											TagValues.Add(MakeShared<FJsonValueString>(TagStr));
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		if (TagValues.Num() > 0)
+		{
+			AssetObject->SetArrayField(TEXT("gameplay_tags"), TagValues);
+		}
+
+		// ── Blueprint Execution Flows ────────────────────────────────────
+		TArray<TSharedPtr<FJsonValue>> FlowValues;
+		for (const UEdGraph* Graph : Graphs)
+		{
+			if (!Graph) continue;
+			// Find entry event nodes
+			for (const UEdGraphNode* Node : Graph->Nodes)
+			{
+				const UK2Node_Event* EventNode = Cast<UK2Node_Event>(Node);
+				if (!EventNode) continue;
+
+				// BFS from this event along exec pins
+				TArray<TSharedPtr<FJsonValue>> StepValues;
+				TSet<const UEdGraphNode*> FlowVisited;
+				TArray<const UEdGraphNode*> FlowQueue;
+				FlowQueue.Add(EventNode);
+				FlowVisited.Add(EventNode);
+				int32 FlowDepth = 0;
+				const int32 MaxFlowDepth = 15;
+
+				while (FlowQueue.Num() > 0 && FlowDepth < MaxFlowDepth)
+				{
+					TArray<const UEdGraphNode*> NextQueue;
+					for (const UEdGraphNode* Current : FlowQueue)
+					{
+						TSharedPtr<FJsonObject> StepObj = MakeShared<FJsonObject>();
+						StepObj->SetStringField(TEXT("node_id"), Current->NodeGuid.ToString());
+						StepObj->SetStringField(TEXT("node_kind"), Current->GetClass()->GetName());
+						StepObj->SetStringField(TEXT("node_title"), Current->GetNodeTitle(ENodeTitleType::ListView).ToString());
+						StepObj->SetNumberField(TEXT("depth"), FlowDepth);
+						if (Graph->GetName().Len() > 0)
+						{
+							StepObj->SetStringField(TEXT("graph_name"), Graph->GetName());
+						}
+						StepValues.Add(MakeShared<FJsonValueObject>(StepObj));
+
+						// Follow exec output pins
+						for (const UEdGraphPin* ExecPin : Current->Pins)
+						{
+							if (ExecPin->Direction != EGPD_Output) continue;
+							if (ExecPin->PinType.PinCategory != UEdGraphSchema_K2::PC_Exec) continue;
+							for (const UEdGraphPin* LinkedPin : ExecPin->LinkedTo)
+							{
+								if (LinkedPin && LinkedPin->GetOwningNode() && !FlowVisited.Contains(LinkedPin->GetOwningNode()))
+								{
+									FlowVisited.Add(LinkedPin->GetOwningNode());
+									NextQueue.Add(LinkedPin->GetOwningNode());
+								}
+							}
+						}
+					}
+					FlowQueue = NextQueue;
+					FlowDepth++;
+				}
+
+				if (StepValues.Num() > 1)  // Only emit flows with more than just the entry event
+				{
+					TSharedPtr<FJsonObject> FlowObj = MakeShared<FJsonObject>();
+					const FName EventName = EventNode->EventReference.GetMemberName();
+					FlowObj->SetStringField(TEXT("event_name"), EventName.IsNone() ? EventNode->GetNodeTitle(ENodeTitleType::ListView).ToString() : EventName.ToString());
+					FlowObj->SetArrayField(TEXT("steps"), StepValues);
+					FlowValues.Add(MakeShared<FJsonValueObject>(FlowObj));
+				}
+			}
+		}
+		if (FlowValues.Num() > 0)
+		{
+			AssetObject->SetArrayField(TEXT("flows"), FlowValues);
 		}
 
 		// File modification timestamp for incremental change detection

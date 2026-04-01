@@ -278,7 +278,7 @@ const BACKTICK_TABLES = new Set([
   'TypeAlias', 'Const', 'Static', 'Property', 'Record', 'Delegate', 'Annotation',
   'Constructor', 'Template', 'Module', 'Blueprint',
   'AnimBlueprint', 'WidgetBlueprint', 'GameplayAbility', 'GameplayEffect',
-  'StateTree', 'DataTable', 'DataAsset',
+  'StateTree', 'DataTable', 'DataAsset', 'GameplayTag',
 ]);
 
 const escapeTableName = (table: string): string => {

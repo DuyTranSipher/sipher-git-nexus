@@ -386,5 +386,110 @@ export const ingestBlueprintsIntoGraph = async (
     }
   }
 
+  // ── Fifth pass: REFERENCES_TAG edges (Gameplay Tags) ──────────────
+  for (const asset of assets) {
+    const tags = asset.gameplay_tags || [];
+    if (tags.length === 0) continue;
+
+    const sourceBpId = blueprintIdByAssetPath.get(asset.asset_path);
+    if (!sourceBpId) continue;
+
+    for (const tag of tags) {
+      const tagNodeId = generateId('GameplayTag', tag);
+      // Only create edge if the tag node exists in the graph
+      if (!graph.getNode(tagNodeId)) continue;
+
+      graph.addRelationship({
+        id: generateId('REFERENCES_TAG', `${sourceBpId}->${tagNodeId}:${edgeCounter++}`),
+        sourceId: sourceBpId,
+        targetId: tagNodeId,
+        type: 'REFERENCES_TAG',
+        confidence: 0.9,
+        reason: 'blueprint-gameplay-tag',
+      });
+      edgesAdded++;
+    }
+  }
+
+  // ── Sixth pass: Blueprint Execution Flows as Process nodes ─────
+  for (const asset of assets) {
+    const flows = asset.flows || [];
+    if (flows.length === 0) continue;
+
+    const ownerBpId = blueprintIdByAssetPath.get(asset.asset_path);
+    if (!ownerBpId) continue;
+    const bpName = extractAssetName(asset.asset_path);
+
+    for (const flow of flows) {
+      if (!flow.steps || flow.steps.length === 0) continue;
+
+      const processName = `${bpName}::${flow.event_name}`;
+      const processId = generateId('Process', `bp:${asset.asset_path}:${flow.event_name}`);
+
+      graph.addNode({
+        id: processId,
+        label: 'Process',
+        properties: {
+          name: processName,
+          filePath: asset.asset_path,
+          startLine: -1,
+          endLine: -1,
+          processType: 'intra_community',
+          stepCount: flow.steps.length,
+          description: `Blueprint event flow: ${flow.event_name}`,
+        },
+      });
+      nodesAdded++;
+
+      // CONTAINS: owning Blueprint → Process
+      graph.addRelationship({
+        id: generateId('CONTAINS', `${ownerBpId}->${processId}:${edgeCounter++}`),
+        sourceId: ownerBpId,
+        targetId: processId,
+        type: 'CONTAINS',
+        confidence: 1.0,
+        reason: 'blueprint-flow-owner',
+      });
+      edgesAdded++;
+
+      // STEP_IN_PROCESS: link the owning Blueprint as a participant
+      graph.addRelationship({
+        id: generateId('STEP_IN_PROCESS', `${ownerBpId}->${processId}:${edgeCounter++}`),
+        sourceId: ownerBpId,
+        targetId: processId,
+        type: 'STEP_IN_PROCESS',
+        confidence: 1.0,
+        reason: 'blueprint-flow-entry',
+        step: 1,
+      });
+      edgesAdded++;
+
+      // For steps that are CallFunction nodes, try to link to C++ symbols
+      for (let i = 0; i < flow.steps.length; i++) {
+        const step = flow.steps[i];
+        if (!step.node_title) continue;
+        // CallFunction nodes have titles like "ClassName::FunctionName" or just "FunctionName"
+        const colonIdx = step.node_title.lastIndexOf('::');
+        const funcName = colonIdx >= 0 ? step.node_title.slice(colonIdx + 2) : step.node_title;
+        // Skip common non-function nodes
+        if (funcName === 'Sequence' || funcName === 'Branch' || funcName.startsWith('K2Node_')) continue;
+
+        const candidates = symbolByName.get(funcName);
+        if (candidates && candidates.length > 0) {
+          graph.addRelationship({
+            id: generateId('STEP_IN_PROCESS', `${candidates[0].id}->${processId}:${edgeCounter++}`),
+            sourceId: candidates[0].id,
+            targetId: processId,
+            type: 'STEP_IN_PROCESS',
+            confidence: 0.7,
+            reason: 'blueprint-flow-step',
+            step: i + 2,
+          });
+          edgesAdded++;
+        }
+      }
+    }
+  }
+
   return { nodesAdded, edgesAdded };
 };

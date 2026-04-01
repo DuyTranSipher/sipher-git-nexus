@@ -20,6 +20,7 @@ export const NODE_TABLES = [
   // Unreal Engine Blueprint assets
   'Blueprint', 'AnimBlueprint', 'WidgetBlueprint', 'GameplayAbility', 'GameplayEffect',
   'StateTree', 'DataTable', 'DataAsset',
+  'GameplayTag',
 ] as const;
 export type NodeTableName = typeof NODE_TABLES[number];
 
@@ -29,7 +30,7 @@ export type NodeTableName = typeof NODE_TABLES[number];
 export const REL_TABLE_NAME = 'CodeRelation';
 
 // Valid relation types
-export const REL_TYPES = ['CONTAINS', 'DEFINES', 'IMPORTS', 'CALLS', 'EXTENDS', 'IMPLEMENTS', 'HAS_METHOD', 'HAS_PROPERTY', 'ACCESSES', 'OVERRIDES', 'MEMBER_OF', 'STEP_IN_PROCESS', 'DISPATCHES', 'SUBSCRIBES_TO'] as const;
+export const REL_TYPES = ['CONTAINS', 'DEFINES', 'IMPORTS', 'CALLS', 'EXTENDS', 'IMPLEMENTS', 'HAS_METHOD', 'HAS_PROPERTY', 'ACCESSES', 'OVERRIDES', 'MEMBER_OF', 'STEP_IN_PROCESS', 'DISPATCHES', 'SUBSCRIBES_TO', 'REFERENCES_TAG', 'PARENT_TAG'] as const;
 export type RelType = typeof REL_TYPES[number];
 
 // ============================================================================
@@ -205,6 +206,7 @@ export const GAMEPLAY_EFFECT_SCHEMA = CODE_ELEMENT_BASE('GameplayEffect');
 export const STATE_TREE_SCHEMA = CODE_ELEMENT_BASE('StateTree');
 export const DATA_TABLE_SCHEMA = CODE_ELEMENT_BASE('DataTable');
 export const DATA_ASSET_SCHEMA = CODE_ELEMENT_BASE('DataAsset');
+export const GAMEPLAY_TAG_SCHEMA = CODE_ELEMENT_BASE('GameplayTag');
 
 // ============================================================================
 // RELATION TABLE SCHEMA
@@ -405,6 +407,7 @@ CREATE REL TABLE ${REL_TABLE_NAME} (
   FROM \`Blueprint\` TO Method,
   FROM \`Blueprint\` TO Function,
   FROM \`Blueprint\` TO \`Blueprint\`,
+  FROM \`Blueprint\` TO \`GameplayTag\`,
   FROM \`Blueprint\` TO Community,
   FROM \`Blueprint\` TO Process,
   FROM \`AnimBlueprint\` TO Class,
@@ -413,6 +416,7 @@ CREATE REL TABLE ${REL_TABLE_NAME} (
   FROM \`AnimBlueprint\` TO Function,
   FROM \`AnimBlueprint\` TO \`Blueprint\`,
   FROM \`AnimBlueprint\` TO \`AnimBlueprint\`,
+  FROM \`AnimBlueprint\` TO \`GameplayTag\`,
   FROM \`AnimBlueprint\` TO Community,
   FROM \`AnimBlueprint\` TO Process,
   FROM \`WidgetBlueprint\` TO Class,
@@ -421,6 +425,7 @@ CREATE REL TABLE ${REL_TABLE_NAME} (
   FROM \`WidgetBlueprint\` TO Function,
   FROM \`WidgetBlueprint\` TO \`Blueprint\`,
   FROM \`WidgetBlueprint\` TO \`WidgetBlueprint\`,
+  FROM \`WidgetBlueprint\` TO \`GameplayTag\`,
   FROM \`WidgetBlueprint\` TO Community,
   FROM \`WidgetBlueprint\` TO Process,
   FROM \`GameplayAbility\` TO Class,
@@ -429,6 +434,7 @@ CREATE REL TABLE ${REL_TABLE_NAME} (
   FROM \`GameplayAbility\` TO Function,
   FROM \`GameplayAbility\` TO \`Blueprint\`,
   FROM \`GameplayAbility\` TO \`GameplayAbility\`,
+  FROM \`GameplayAbility\` TO \`GameplayTag\`,
   FROM \`GameplayAbility\` TO Community,
   FROM \`GameplayAbility\` TO Process,
   FROM \`GameplayEffect\` TO Class,
@@ -437,6 +443,7 @@ CREATE REL TABLE ${REL_TABLE_NAME} (
   FROM \`GameplayEffect\` TO Function,
   FROM \`GameplayEffect\` TO \`Blueprint\`,
   FROM \`GameplayEffect\` TO \`GameplayEffect\`,
+  FROM \`GameplayEffect\` TO \`GameplayTag\`,
   FROM \`GameplayEffect\` TO Community,
   FROM \`GameplayEffect\` TO Process,
   FROM \`StateTree\` TO Class,
@@ -445,6 +452,7 @@ CREATE REL TABLE ${REL_TABLE_NAME} (
   FROM \`StateTree\` TO Function,
   FROM \`StateTree\` TO \`Blueprint\`,
   FROM \`StateTree\` TO \`StateTree\`,
+  FROM \`StateTree\` TO \`GameplayTag\`,
   FROM \`StateTree\` TO Community,
   FROM \`StateTree\` TO Process,
   FROM \`DataTable\` TO Class,
@@ -453,6 +461,7 @@ CREATE REL TABLE ${REL_TABLE_NAME} (
   FROM \`DataTable\` TO Function,
   FROM \`DataTable\` TO \`Blueprint\`,
   FROM \`DataTable\` TO \`DataTable\`,
+  FROM \`DataTable\` TO \`GameplayTag\`,
   FROM \`DataTable\` TO Community,
   FROM \`DataTable\` TO Process,
   FROM \`DataAsset\` TO Class,
@@ -462,7 +471,11 @@ CREATE REL TABLE ${REL_TABLE_NAME} (
   FROM \`DataAsset\` TO \`Blueprint\`,
   FROM \`DataAsset\` TO \`DataAsset\`,
   FROM \`DataAsset\` TO Community,
+  FROM \`DataAsset\` TO \`GameplayTag\`,
   FROM \`DataAsset\` TO Process,
+  FROM \`GameplayTag\` TO \`GameplayTag\`,
+  FROM \`GameplayTag\` TO Community,
+  FROM \`GameplayTag\` TO Process,
   type STRING,
   confidence DOUBLE,
   reason STRING,
@@ -531,6 +544,7 @@ export const NODE_SCHEMA_QUERIES = [
   STATE_TREE_SCHEMA,
   DATA_TABLE_SCHEMA,
   DATA_ASSET_SCHEMA,
+  GAMEPLAY_TAG_SCHEMA,
 ];
 
 export const REL_SCHEMA_QUERIES = [

@@ -41,7 +41,8 @@ export type NodeLabel =
   | 'GameplayEffect'
   | 'StateTree'
   | 'DataTable'
-  | 'DataAsset';
+  | 'DataAsset'
+  | 'GameplayTag';
 
 
 import { SupportedLanguages } from '../../config/supported-languages.js';
@@ -101,6 +102,8 @@ export type RelationshipType =
   | 'STEP_IN_PROCESS'
   | 'DISPATCHES'
   | 'SUBSCRIBES_TO'
+  | 'REFERENCES_TAG'
+  | 'PARENT_TAG'
 
 export interface GraphNode {
   id:  string,

@@ -13,6 +13,10 @@ export interface UnrealAssetManifestAsset {
   event_overrides?: { event_name: string; owner_class: string }[];
   /** Event dispatcher delegate names bound in this Blueprint (deep mode only) */
   event_dispatchers?: string[];
+  /** Gameplay tags referenced by this asset (deep mode only) */
+  gameplay_tags?: string[];
+  /** Blueprint execution flows extracted at index time (deep mode only) */
+  flows?: { event_name: string; steps: UnrealChainNode[] }[];
   /** ISO timestamp of the .uasset file's last modification time. Used for incremental change detection. */
   file_modified_at?: string;
 }

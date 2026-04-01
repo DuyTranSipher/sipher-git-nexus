@@ -228,6 +228,18 @@ export const analyzeCommand = async (
     }
   } catch { /* non-fatal — Unreal integration is optional */ }
 
+  // ── Phase 1.6: Gameplay Tag Ingestion (optional) ─────────────────────
+  try {
+    const { parseGameplayTags, ingestGameplayTagsIntoGraph } = await import('../unreal/gameplay-tags.js');
+    const tagTree = await parseGameplayTags(repoPath);
+    if (tagTree.tags.size > 0) {
+      const tagResult = ingestGameplayTagsIntoGraph(pipelineResult.graph, tagTree);
+      if (tagResult.nodesAdded > 0) {
+        console.log(`  Indexed ${tagResult.nodesAdded} Gameplay Tags (${tagResult.edgesAdded} edges)`);
+      }
+    }
+  } catch { /* non-fatal */ }
+
   // ── Phase 2: LadybugDB (60–85%) ──────────────────────────────────────
   updateBar(60, 'Loading into LadybugDB...');
 

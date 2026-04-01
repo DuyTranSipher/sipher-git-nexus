@@ -99,6 +99,8 @@ export type RelationshipType =
   | 'ACCESSES'
   | 'MEMBER_OF'
   | 'STEP_IN_PROCESS'
+  | 'DISPATCHES'
+  | 'SUBSCRIBES_TO'
 
 export interface GraphNode {
   id:  string,

@@ -11,6 +11,7 @@
 #include "Engine/Blueprint.h"
 #include "EdGraphSchema_K2.h"
 #include "K2Node_CallFunction.h"
+#include "K2Node_CreateDelegate.h"
 #include "K2Node_Event.h"
 #include "K2Node_IfThenElse.h"
 #include "K2Node_Switch.h"
@@ -354,6 +355,72 @@ int32 UGitNexusBlueprintAnalyzerCommandlet::RunSyncAssetsDeep(
 			NativeFunctionRefValues.Add(MakeShared<FJsonValueString>(Ref));
 		}
 		AssetObject->SetArrayField(TEXT("native_function_refs"), NativeFunctionRefValues);
+
+		// ── Implemented Interfaces ──────────────────────────────────────
+		TArray<TSharedPtr<FJsonValue>> InterfaceValues;
+		for (const FBPInterfaceDescription& Interface : Blueprint->ImplementedInterfaces)
+		{
+			if (Interface.Interface)
+			{
+				InterfaceValues.Add(MakeShared<FJsonValueString>(Interface.Interface->GetPathName()));
+			}
+		}
+		if (InterfaceValues.Num() > 0)
+		{
+			AssetObject->SetArrayField(TEXT("implements_interfaces"), InterfaceValues);
+		}
+
+		// ── Event Overrides (BlueprintImplementableEvent / BlueprintNativeEvent) ─
+		TArray<TSharedPtr<FJsonValue>> EventOverrideValues;
+		TSet<FString> SeenOverrides;
+		for (const UEdGraph* Graph : Graphs)
+		{
+			if (!Graph) continue;
+			for (const UEdGraphNode* Node : Graph->Nodes)
+			{
+				const UK2Node_Event* EventNode = Cast<UK2Node_Event>(Node);
+				if (!EventNode) continue;
+				const FName EventName = EventNode->EventReference.GetMemberName();
+				if (EventName.IsNone()) continue;
+				// Only emit if this overrides a parent function (not a custom event)
+				const UClass* EventOwner = EventNode->EventReference.GetMemberParentClass();
+				if (!EventOwner || EventOwner == Blueprint->GeneratedClass) continue;
+				const FString Key = FString::Printf(TEXT("%s::%s"), *EventOwner->GetName(), *EventName.ToString());
+				if (SeenOverrides.Contains(Key)) continue;
+				SeenOverrides.Add(Key);
+				TSharedPtr<FJsonObject> Override = MakeShared<FJsonObject>();
+				Override->SetStringField(TEXT("event_name"), EventName.ToString());
+				Override->SetStringField(TEXT("owner_class"), EventOwner->GetName());
+				EventOverrideValues.Add(MakeShared<FJsonValueObject>(Override));
+			}
+		}
+		if (EventOverrideValues.Num() > 0)
+		{
+			AssetObject->SetArrayField(TEXT("event_overrides"), EventOverrideValues);
+		}
+
+		// ── Event Dispatcher Bindings ───────────────────────────────────
+		TArray<TSharedPtr<FJsonValue>> DispatcherValues;
+		TSet<FString> SeenDispatchers;
+		for (const UEdGraph* Graph : Graphs)
+		{
+			if (!Graph) continue;
+			for (const UEdGraphNode* Node : Graph->Nodes)
+			{
+				const UK2Node_CreateDelegate* DelegateNode = Cast<UK2Node_CreateDelegate>(Node);
+				if (!DelegateNode) continue;
+				const FName DelegateName = DelegateNode->GetDelegateSignature() ? DelegateNode->GetDelegateSignature()->GetFName() : NAME_None;
+				if (DelegateName.IsNone()) continue;
+				const FString DelegateStr = DelegateName.ToString();
+				if (SeenDispatchers.Contains(DelegateStr)) continue;
+				SeenDispatchers.Add(DelegateStr);
+				DispatcherValues.Add(MakeShared<FJsonValueString>(DelegateStr));
+			}
+		}
+		if (DispatcherValues.Num() > 0)
+		{
+			AssetObject->SetArrayField(TEXT("event_dispatchers"), DispatcherValues);
+		}
 
 		// File modification timestamp for incremental change detection
 		const FString FileModifiedAt = GetAssetFileModifiedAt(AssetData);

@@ -7,6 +7,12 @@ export interface UnrealAssetManifestAsset {
   native_parents?: string[];
   native_function_refs?: string[];
   dependencies?: string[];
+  /** Blueprint interfaces implemented by this asset (deep mode only) */
+  implements_interfaces?: string[];
+  /** Event overrides — functions from parent class overridden in this Blueprint (deep mode only) */
+  event_overrides?: { event_name: string; owner_class: string }[];
+  /** Event dispatcher delegate names bound in this Blueprint (deep mode only) */
+  event_dispatchers?: string[];
   /** ISO timestamp of the .uasset file's last modification time. Used for incremental change detection. */
   file_modified_at?: string;
 }

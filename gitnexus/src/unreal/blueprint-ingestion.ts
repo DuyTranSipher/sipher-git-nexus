@@ -314,5 +314,77 @@ export const ingestBlueprintsIntoGraph = async (
     }
   }
 
+  // ── Fourth pass: Cross-language edges (deep mode only) ─────────────
+  // IMPLEMENTS: Blueprint → C++ Interface class
+  // OVERRIDES: Blueprint → C++ event function (BlueprintNativeEvent/BlueprintImplementableEvent)
+  // DISPATCHES: Blueprint → C++ event dispatcher delegate
+  for (const asset of assets) {
+    const sourceBpId = blueprintIdByAssetPath.get(asset.asset_path);
+    if (!sourceBpId) continue;
+
+    // IMPLEMENTS edges for Blueprint interfaces
+    const interfaces = asset.implements_interfaces || [];
+    for (const iface of interfaces) {
+      const ifaceName = extractClassName(iface);
+      // Look for Interface or Class node matching the interface name
+      const candidates = classByName.get(ifaceName);
+      if (candidates && candidates.length > 0) {
+        graph.addRelationship({
+          id: generateId('IMPLEMENTS', `${sourceBpId}->${candidates[0].id}:${edgeCounter++}`),
+          sourceId: sourceBpId,
+          targetId: candidates[0].id,
+          type: 'IMPLEMENTS',
+          confidence: 1.0,
+          reason: 'blueprint-interface',
+        });
+        edgesAdded++;
+      }
+    }
+
+    // OVERRIDES edges for event overrides
+    const overrides = asset.event_overrides || [];
+    for (const override of overrides) {
+      const funcCandidates = symbolByName.get(override.event_name);
+      if (!funcCandidates || funcCandidates.length === 0) continue;
+
+      // Prefer method owned by the specified class
+      let matched: GraphNode | undefined;
+      if (override.owner_class) {
+        matched = funcCandidates.find(c => {
+          const owner = methodOwnerName.get(c.id);
+          return owner === override.owner_class;
+        });
+      }
+      if (!matched) matched = funcCandidates[0];
+
+      graph.addRelationship({
+        id: generateId('OVERRIDES', `${sourceBpId}->${matched.id}:${edgeCounter++}`),
+        sourceId: sourceBpId,
+        targetId: matched.id,
+        type: 'OVERRIDES',
+        confidence: 1.0,
+        reason: 'blueprint-event-override',
+      });
+      edgesAdded++;
+    }
+
+    // DISPATCHES edges for event dispatcher bindings
+    const dispatchers = asset.event_dispatchers || [];
+    for (const dispatcherName of dispatchers) {
+      const funcCandidates = symbolByName.get(dispatcherName);
+      if (!funcCandidates || funcCandidates.length === 0) continue;
+
+      graph.addRelationship({
+        id: generateId('DISPATCHES', `${sourceBpId}->${funcCandidates[0].id}:${edgeCounter++}`),
+        sourceId: sourceBpId,
+        targetId: funcCandidates[0].id,
+        type: 'DISPATCHES',
+        confidence: 0.9,
+        reason: 'blueprint-event-dispatcher',
+      });
+      edgesAdded++;
+    }
+  }
+
   return { nodesAdded, edgesAdded };
 };

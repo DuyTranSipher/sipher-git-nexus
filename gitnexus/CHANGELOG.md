@@ -4,6 +4,67 @@ All notable changes to GitNexus will be documented in this file.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-04-02
+
+### Added
+
+- **Unreal Blueprint wiki support**: Wiki generation now auto-detects Unreal Engine projects and includes Blueprint assets (Blueprint, AnimBlueprint, WidgetBlueprint, GameplayAbility, GameplayEffect, StateTree, DataTable, DataAsset) alongside C++ source code in generated documentation
+- **Blueprint graph queries for wiki**: New queries (`getBlueprintAssets`, `getBlueprintEdgesForAssets`, `getBlueprintAssetDistribution`, `getGameplayTagSummary`) provide structured Blueprint relationship data (EXTENDS, CALLS, IMPORTS, IMPLEMENTS, OVERRIDES, DISPATCHES, REFERENCES_TAG) to the wiki generator
+- **UE-aware LLM prompts**: Grouping, module, and overview prompts now include Unreal-specific addenda when Blueprint content is detected, guiding the LLM to document cross-language execution flows
+- **`--exclude` flag for wiki generation**: Comma-separated directory patterns to exclude from wiki content, persisted to `wiki/config.json` for future runs
+- **`.uproject` metadata in wiki overview**: Reads engine version, C++ modules, and enabled plugins from the project file
+
+### Fixed
+
+- **Incremental wiki updates detect `.uasset`/`.umap` changes**: Blueprint-containing modules are now correctly flagged for regeneration when asset files change
+- **Excluded files respected in incremental mode**: New files matching exclusion patterns are no longer added to modules during incremental updates
+
+## [1.4.2] - 2026-04-01
+
+### Fixed
+
+- **Unreal sync spinner**: Smooth bouncing dots animation with stable text rendering during commandlet execution
+- **Spinner progress wiring**: Wire up spinner progress animation for the sync command lifecycle
+
+## [1.4.0] - 2026-04-01
+
+### Added
+
+- **Gameplay Tag semantic layer**: First-class `GameplayTag` nodes in the knowledge graph with `REFERENCES_TAG` edges from Blueprint and C++ nodes, enabling tag-based queries and cross-module tracing
+- **Blueprint execution flow extraction**: Blueprint node graphs are now analyzed to produce execution flow (process) entries in the knowledge graph
+- **Cross-language IMPLEMENTS, OVERRIDES, DISPATCHES edges**: C++ interface implementations, virtual method overrides, and multicast delegate dispatches from Blueprints now produce typed edges linking Blueprint and C++ nodes
+- **UE reflection macro extraction**: `UCLASS`, `UPROPERTY`, `UFUNCTION`, `USTRUCT`, `UENUM` macros are parsed from C++ headers and stored as node properties with specifier details
+- **Asset type taxonomy**: Typed asset schemas for Blueprints, AnimBlueprints, WidgetBlueprints, GameplayAbilities, GameplayEffects, StateTrees, DataTables, and DataAssets with label-per-type graph nodes
+- **`gitnexus unreal` CLI namespace**: First-class CLI command group for Unreal Engine workflows
+
+## [1.3.12] - 2026-04-01
+
+### Fixed
+
+- **Vendor UE plugin source update**: Updated the bundled Unreal Engine plugin source to match latest commandlet changes
+
+## [1.3.11] - 2026-03-31
+
+### Added
+
+- **Incremental deep sync**: `gitnexus unreal-sync --deep` now uses mtime-based change detection to only re-process modified assets, significantly reducing sync time on large projects
+
+## [1.3.10] - 2026-03-31
+
+### Fixed
+
+- **Blueprint-to-Blueprint EXTENDS edges**: Ingestion now correctly produces EXTENDS edges between Blueprint assets that inherit from other Blueprints (not just C++ classes)
+
+### Changed
+
+- **Exploring skill routing**: Updated exploring skill to route entity names vs concepts separately and bridge C++/Blueprint symbol lookups
+
+## [1.3.8] - 2026-03-31
+
+### Fixed
+
+- **Blueprint/StateTree search discovery**: Blueprint and StateTree assets are now discoverable by `gitnexus_query` through the search index
+
 ## [1.3.7] - 2026-03-31
 
 ### Fixed

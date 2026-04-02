@@ -2,6 +2,80 @@
 
 All notable changes to GitNexus will be documented in this file.
 
+## [1.5.0] - 2026-04-02
+
+### Added
+
+- **Unreal Blueprint wiki support**: Wiki generation auto-detects UE projects and documents Blueprint assets alongside C++ source code
+- **Blueprint graph queries for wiki**: Structured relationship data (EXTENDS, CALLS, IMPORTS, IMPLEMENTS, OVERRIDES, DISPATCHES, REFERENCES_TAG) for wiki pages
+- **UE-aware LLM prompts**: Grouping, module, and overview prompts include Unreal-specific context when Blueprint content is detected
+- **`--exclude` flag for wiki generation**: Persistent directory exclusion patterns saved to `wiki/config.json`
+- **`.uproject` metadata in wiki overview**: Engine version, C++ modules, and enabled plugins from the project file
+
+### Fixed
+
+- **Incremental wiki updates detect `.uasset`/`.umap` changes**
+- **Excluded files respected in incremental mode**
+
+## [1.4.2] - 2026-04-01
+
+### Fixed
+
+- **Unreal sync spinner**: Smooth bouncing dots animation with stable text rendering
+- **Spinner progress wiring**: Wire up spinner progress animation for the sync command lifecycle
+
+## [1.4.0] - 2026-04-01
+
+### Added
+
+- **Gameplay Tag semantic layer**: First-class `GameplayTag` nodes with `REFERENCES_TAG` edges
+- **Blueprint execution flow extraction**: Blueprint node graphs produce execution flow entries
+- **Cross-language IMPLEMENTS, OVERRIDES, DISPATCHES edges**: Typed edges linking Blueprint and C++ nodes
+- **UE reflection macro extraction**: `UCLASS`, `UPROPERTY`, `UFUNCTION`, `USTRUCT`, `UENUM` macros parsed from C++ headers
+- **Asset type taxonomy**: Typed asset schemas with label-per-type graph nodes
+- **`gitnexus unreal` CLI namespace**: First-class CLI command group for Unreal Engine workflows
+
+## [1.3.12] - 2026-04-01
+
+### Fixed
+
+- **Vendor UE plugin source update**: Updated bundled Unreal Engine plugin source
+
+## [1.3.11] - 2026-03-31
+
+### Added
+
+- **Incremental deep sync**: Mtime-based change detection for `gitnexus unreal-sync --deep`
+
+## [1.3.10] - 2026-03-31
+
+### Fixed
+
+- **Blueprint-to-Blueprint EXTENDS edges**: EXTENDS edges between Blueprint assets that inherit from other Blueprints
+
+## [1.3.8] - 2026-03-31
+
+### Fixed
+
+- **Blueprint/StateTree search discovery**: Assets now discoverable by `gitnexus_query`
+
+## [1.3.7] - 2026-03-31
+
+### Fixed
+
+- **Unreal deep mode drops non-Blueprint assets**: `gitnexus unreal-sync --deep` now includes `UStateTree` assets
+
+## [1.3.6] - 2026-03-31
+
+### Fixed
+
+- **Unreal glob `**` segment boundary**: Fixed false-matching on `**` patterns
+- **StateTree assets indexed**: Added `UStateTree` to asset registry query
+
+### Added
+
+- **Glob and regex pattern support for Unreal path filters**
+
 ## [1.3.3] - 2026-03-27
 
 ### Fixed

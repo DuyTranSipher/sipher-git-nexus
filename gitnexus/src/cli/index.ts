@@ -73,6 +73,7 @@ program
   .option('--api-key <key>', 'LLM API key (saved to ~/.gitnexus/config.json)')
   .option('--concurrency <n>', 'Parallel LLM calls (default: 3)', '3')
   .option('--gist', 'Publish wiki as a public GitHub Gist after generation')
+  .option('--exclude <patterns>', 'Comma-separated directory patterns to exclude (saved for future runs)')
   .action(createLazyAction(() => import('./wiki.js'), 'wikiCommand'));
 
 program

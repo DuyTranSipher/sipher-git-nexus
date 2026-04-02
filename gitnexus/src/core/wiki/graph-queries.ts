@@ -24,6 +24,23 @@ export interface CallEdge {
   toName: string;
 }
 
+export interface BlueprintAssetInfo {
+  assetPath: string;
+  name: string;
+  label: string;
+  assetClass: string;
+}
+
+export interface BlueprintEdgeData {
+  extends: string[];
+  calls: string[];
+  imports: string[];
+  implements: string[];
+  overrides: string[];
+  dispatches: string[];
+  gameplayTags: string[];
+}
+
 export interface ProcessInfo {
   id: string;
   label: string;
@@ -300,4 +317,129 @@ export async function getInterModuleEdgesForOverview(
       return { from, to, count };
     })
     .sort((a, b) => b.count - a.count);
+}
+
+// ─── Blueprint / Unreal Queries ──────────────────────────────────────
+
+// Blueprint-family labels used for querying UE asset nodes
+const BLUEPRINT_LABELS = [
+  'Blueprint', 'AnimBlueprint', 'WidgetBlueprint',
+  'GameplayAbility', 'GameplayEffect', 'StateTree', 'DataTable', 'DataAsset',
+] as const;
+
+/**
+ * Get all Blueprint asset nodes from the graph.
+ * Returns empty array if no Unreal content is indexed (detection signal).
+ */
+export async function getBlueprintAssets(): Promise<BlueprintAssetInfo[]> {
+  // Query each Blueprint-family label and union the results
+  const allRows: Array<Record<string, unknown> & { _label: string }> = [];
+  for (const label of BLUEPRINT_LABELS) {
+    const rows = await executeQuery(REPO_ID, `
+      MATCH (b:${label})
+      RETURN b.filePath AS assetPath, b.name AS name
+    `);
+    for (const r of rows) {
+      allRows.push({ ...r, _label: label });
+    }
+  }
+
+  // Deduplicate by assetPath (a node may match multiple labels)
+  const seen = new Set<string>();
+  const results: BlueprintAssetInfo[] = [];
+  for (const r of allRows) {
+    const assetPath = (r.assetPath || r[0]) as string;
+    if (seen.has(assetPath)) continue;
+    seen.add(assetPath);
+    results.push({
+      assetPath,
+      name: (r.name || r[1]) as string,
+      label: r._label,
+      assetClass: r._label,
+    });
+  }
+  return results.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Get structured edge data for a set of Blueprint asset paths.
+ * Returns a Map keyed by asset path with all relationship targets.
+ */
+export async function getBlueprintEdgesForAssets(
+  assetPaths: string[],
+): Promise<Map<string, BlueprintEdgeData>> {
+  if (assetPaths.length === 0) return new Map();
+
+  const result = new Map<string, BlueprintEdgeData>();
+  for (const ap of assetPaths) {
+    result.set(ap, {
+      extends: [], calls: [], imports: [],
+      implements: [], overrides: [], dispatches: [], gameplayTags: [],
+    });
+  }
+
+  const pathList = assetPaths.map(p => `'${p.replace(/'/g, "''")}'`).join(', ');
+
+  // Query all outgoing edges from these Blueprints in one batch
+  const edgeTypes = ['EXTENDS', 'CALLS', 'IMPORTS', 'IMPLEMENTS', 'OVERRIDES', 'DISPATCHES', 'REFERENCES_TAG'];
+  const typeList = edgeTypes.map(t => `'${t}'`).join(', ');
+
+  const rows = await executeQuery(REPO_ID, `
+    MATCH (src)-[r:CodeRelation]->(tgt)
+    WHERE src.filePath IN [${pathList}] AND r.type IN [${typeList}]
+    RETURN src.filePath AS srcPath, r.type AS edgeType, tgt.name AS targetName
+  `);
+
+  for (const row of rows) {
+    const srcPath = row.srcPath || row[0];
+    const edgeType = row.edgeType || row[1];
+    const targetName = row.targetName || row[2];
+    const entry = result.get(srcPath);
+    if (!entry || !targetName) continue;
+
+    switch (edgeType) {
+      case 'EXTENDS': entry.extends.push(targetName); break;
+      case 'CALLS': entry.calls.push(targetName); break;
+      case 'IMPORTS': entry.imports.push(targetName); break;
+      case 'IMPLEMENTS': entry.implements.push(targetName); break;
+      case 'OVERRIDES': entry.overrides.push(targetName); break;
+      case 'DISPATCHES': entry.dispatches.push(targetName); break;
+      case 'REFERENCES_TAG': entry.gameplayTags.push(targetName); break;
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Count Blueprint-family nodes by label for the overview page.
+ */
+export async function getBlueprintAssetDistribution(): Promise<Record<string, number>> {
+  const dist: Record<string, number> = {};
+  for (const label of BLUEPRINT_LABELS) {
+    const rows = await executeQuery(REPO_ID, `
+      MATCH (b:${label})
+      RETURN count(b) AS cnt
+    `);
+    const cnt = (rows[0]?.cnt || rows[0]?.[0] || 0) as number;
+    if (cnt > 0) dist[label] = cnt;
+  }
+  return dist;
+}
+
+/**
+ * Get top gameplay tags by reference count for the overview page.
+ */
+export async function getGameplayTagSummary(limit = 20): Promise<Array<{ tag: string; refCount: number }>> {
+  const rows = await executeQuery(REPO_ID, `
+    MATCH (b)-[:CodeRelation {type: 'REFERENCES_TAG'}]->(t:GameplayTag)
+    RETURN t.name AS tag, count(b) AS refCount
+    ORDER BY refCount DESC
+    LIMIT ${limit}
+  `);
+
+  return rows.map(r => ({
+    tag: r.tag || r[0],
+    refCount: r.refCount || r[1] || 0,
+  }));
 }

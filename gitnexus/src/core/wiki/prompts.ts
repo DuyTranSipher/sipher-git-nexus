@@ -205,3 +205,78 @@ function shortPath(fp: string): string {
   const parts = fp.replace(/\\/g, '/').split('/');
   return parts.length > 3 ? parts.slice(-3).join('/') : fp;
 }
+
+// ─── Unreal / Blueprint Formatting ───────────────────────────────────
+
+import type { BlueprintAssetInfo, BlueprintEdgeData } from './graph-queries.js';
+
+/**
+ * Additional context appended to the grouping system prompt for UE projects.
+ */
+export const GROUPING_UNREAL_ADDENDUM = `
+- This is an Unreal Engine project with both C++ source files and Blueprint assets
+- Blueprint entries appear as asset paths (e.g. /Game/Characters/BP_Hero)
+- Group Blueprints alongside the C++ classes they extend or relate to
+- Treat Blueprint asset types (AnimBlueprint, WidgetBlueprint, GameplayAbility) as functional indicators`;
+
+/**
+ * Additional context appended to the module system prompt for UE modules with Blueprints.
+ */
+export const MODULE_UNREAL_ADDENDUM = `
+- This module contains Unreal Engine Blueprint assets alongside C++ code. Blueprints are documented as structured summaries (not source code). Document the Blueprint layer — what each Blueprint adds, how it connects to C++, and the cross-language execution flows
+- Blueprint inheritance (EXTENDS), interface implementations (IMPLEMENTS), and event overrides (OVERRIDES) are the key cross-language coupling points`;
+
+/**
+ * Additional context appended to the overview system prompt for UE projects.
+ */
+export const OVERVIEW_UNREAL_ADDENDUM = `
+- This is an Unreal Engine project with both C++ and Blueprint assets. Include the Blueprint architecture in the overview — asset types, key inheritance hierarchies, and how C++ and Blueprint layers interact
+- Gameplay Tags, if present, are UE5's universal semantic namespace for cross-system communication`;
+
+/**
+ * Format Blueprint asset summaries for inclusion in module page prompts.
+ */
+export function formatBlueprintSummaries(
+  assets: BlueprintAssetInfo[],
+  edgeData: Map<string, BlueprintEdgeData>,
+): string {
+  if (assets.length === 0) return 'No Blueprint assets in this module.';
+
+  return assets.map(asset => {
+    const edges = edgeData.get(asset.assetPath);
+    const lines: string[] = [];
+
+    const parentInfo = edges?.extends.length ? `, extends ${edges.extends.join(', ')}` : '';
+    lines.push(`### ${asset.name} (${asset.label}${parentInfo})`);
+
+    if (edges) {
+      if (edges.implements.length > 0) lines.push(`- Implements: ${edges.implements.join(', ')}`);
+      if (edges.calls.length > 0) lines.push(`- Calls: ${edges.calls.slice(0, 15).join(', ')}${edges.calls.length > 15 ? ` (+${edges.calls.length - 15} more)` : ''}`);
+      if (edges.imports.length > 0) lines.push(`- Imports: ${edges.imports.slice(0, 10).join(', ')}${edges.imports.length > 10 ? ` (+${edges.imports.length - 10} more)` : ''}`);
+      if (edges.overrides.length > 0) lines.push(`- Overrides: ${edges.overrides.join(', ')}`);
+      if (edges.dispatches.length > 0) lines.push(`- Event Dispatchers: ${edges.dispatches.join(', ')}`);
+      if (edges.gameplayTags.length > 0) lines.push(`- Gameplay Tags: ${edges.gameplayTags.slice(0, 10).join(', ')}${edges.gameplayTags.length > 10 ? ` (+${edges.gameplayTags.length - 10} more)` : ''}`);
+    }
+
+    return lines.join('\n');
+  }).join('\n\n');
+}
+
+/**
+ * Format Blueprint asset distribution for the overview page.
+ */
+export function formatAssetDistribution(dist: Record<string, number>): string {
+  const entries = Object.entries(dist).sort((a, b) => b[1] - a[1]);
+  if (entries.length === 0) return '';
+  const total = entries.reduce((sum, [, n]) => sum + n, 0);
+  return `Total: ${total} Blueprint assets\n` +
+    entries.map(([label, count]) => `- ${label}: ${count}`).join('\n');
+}
+
+/**
+ * Format gameplay tag summary for the overview page.
+ */
+export function formatGameplayTags(tags: Array<{ tag: string; refCount: number }>): string {
+  if (tags.length === 0) return 'No gameplay tags indexed.';
+  return tags.map(t => `- ${t.tag} (${t.refCount} refs)`).join('\n');
+}

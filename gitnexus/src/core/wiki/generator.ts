@@ -25,7 +25,12 @@ import {
   getProcessesForFiles,
   getAllProcesses,
   getInterModuleEdgesForOverview,
+  getBlueprintAssets,
+  getBlueprintEdgesForAssets,
+  getBlueprintAssetDistribution,
+  getGameplayTagSummary,
   type FileWithExports,
+  type BlueprintAssetInfo,
 } from './graph-queries.js';
 import { generateHTMLViewer } from './html-viewer.js';
 
@@ -45,11 +50,17 @@ import {
   PARENT_USER_PROMPT,
   OVERVIEW_SYSTEM_PROMPT,
   OVERVIEW_USER_PROMPT,
+  GROUPING_UNREAL_ADDENDUM,
+  MODULE_UNREAL_ADDENDUM,
+  OVERVIEW_UNREAL_ADDENDUM,
   fillTemplate,
   formatFileListForGrouping,
   formatDirectoryTree,
   formatCallEdges,
   formatProcesses,
+  formatBlueprintSummaries,
+  formatAssetDistribution,
+  formatGameplayTags,
 } from './prompts.js';
 
 import { shouldIgnorePath } from '../../config/ignore-service.js';
@@ -63,6 +74,7 @@ export interface WikiOptions {
   apiKey?: string;
   maxTokensPerModule?: number;
   concurrency?: number;
+  excludePatterns?: string[];
 }
 
 export interface WikiMeta {
@@ -72,6 +84,7 @@ export interface WikiMeta {
   moduleFiles: Record<string, string[]>;
   moduleTree: ModuleTreeNode[];
   failedModules?: string[];
+  isUnrealProject?: boolean;
 }
 
 export interface ModuleTreeNode {
@@ -92,6 +105,8 @@ const LARGE_REPO_GROUPING_FILE_THRESHOLD = 1_500;
 const MAX_FILES_PER_DETERMINISTIC_GROUP = 250;
 const MAX_GROUPING_BATCH_TOKENS = 40_000;
 const MAX_LEAF_SOURCE_TOKENS = 70_000;
+const MAX_LEAF_SOURCE_TOKENS_WITH_BP = 55_000;
+const MAX_BLUEPRINT_SECTION_TOKENS = 15_000;
 const MAX_EDGE_SECTION_TOKENS = 10_000;
 const MAX_PROCESS_SECTION_TOKENS = 10_000;
 const MAX_PARENT_CHILD_DOC_TOKENS = 80_000;
@@ -118,6 +133,31 @@ export function isWikiCodeFilePath(filePath: string): boolean {
 
 export function filterWikiPromptPaths(filePaths: string[]): string[] {
   return filePaths.filter(filePath => !isWikiPromptExcludedPath(filePath) && isWikiCodeFilePath(filePath));
+}
+
+/**
+ * Detect Unreal asset paths that come from the knowledge graph (not disk files).
+ * These start with /Game/, /Script/, /Engine/, or similar UE package prefixes.
+ */
+export function isUnrealAssetPath(fp: string): boolean {
+  const normalized = fp.replace(/\\/g, '/');
+  return normalized.startsWith('/Game/')
+    || normalized.startsWith('/Script/')
+    || normalized.startsWith('/Engine/')
+    || normalized.startsWith('/Plugins/');
+}
+
+/**
+ * Convert a UE asset path to a grouping key for deterministic module tree building.
+ * e.g., "/Game/Characters/Heroes/BP_Hero" → "Content/Characters/Heroes"
+ */
+export function assetPathToGroupingKey(assetPath: string): string {
+  const parts = assetPath.replace(/\\/g, '/').split('/').filter(Boolean);
+  // Replace /Game/ prefix with Content/ for readability
+  if (parts[0] === 'Game') parts[0] = 'Content';
+  // Use first 2-3 directory segments (drop the asset name)
+  const dirParts = parts.slice(0, Math.min(parts.length - 1, 3));
+  return dirParts.length > 0 ? dirParts.join('/') : 'Content';
 }
 
 export function estimateGroupingPromptTokens(files: FileWithExports[]): number {
@@ -154,6 +194,8 @@ export class WikiGenerator {
   private options: WikiOptions;
   private onProgress: ProgressCallback;
   private failedModules: string[] = [];
+  private isUnrealProject = false;
+  private blueprintAssets: BlueprintAssetInfo[] = [];
 
   constructor(
     repoPath: string,
@@ -195,6 +237,25 @@ export class WikiGenerator {
   }
 
   /**
+   * Check if a file path matches any wiki exclusion pattern.
+   * Supports directory name matching ("docs" matches "docs/anything")
+   * and prefix matching ("Plugins/EditorTools" matches nested paths).
+   */
+  private isWikiExcluded(filePath: string): boolean {
+    if (!this.options.excludePatterns?.length) return false;
+    const normalized = filePath.replace(/\\/g, '/');
+    return this.options.excludePatterns.some(pattern => {
+      const p = pattern.replace(/\\/g, '/').replace(/\/+$/, '');
+      // Prefix match: "docs" matches "docs/foo/bar.ts"
+      if (normalized.startsWith(p + '/') || normalized === p) return true;
+      // First segment match: "docs" matches "docs/anything"
+      const firstSegment = normalized.split('/')[0];
+      if (firstSegment === p) return true;
+      return false;
+    });
+  }
+
+  /**
    * Main entry point. Runs the full pipeline or incremental update.
    */
   async run(): Promise<{ pagesGenerated: number; mode: 'full' | 'incremental' | 'up-to-date'; failedModules: string[] }> {
@@ -210,6 +271,11 @@ export class WikiGenerator {
       if (existingMeta.failedModules?.length) {
         this.onProgress('init', 2, 'Retrying previously failed modules...');
         await initWikiDb(this.lbugPath);
+        // Restore Unreal state for retry
+        if (existingMeta.isUnrealProject) {
+          this.isUnrealProject = true;
+          this.blueprintAssets = await getBlueprintAssets();
+        }
         let retryResult: { pagesGenerated: number; mode: 'full' | 'incremental' | 'up-to-date'; failedModules: string[] };
         try {
           retryResult = await this.retryFailedModules(existingMeta, currentCommit);
@@ -280,19 +346,47 @@ export class WikiGenerator {
     const filesWithExports = await getFilesWithExports();
     const allFiles = await getAllFiles();
 
+    // Detect Unreal project by querying for Blueprint nodes
+    this.blueprintAssets = await getBlueprintAssets();
+    this.isUnrealProject = this.blueprintAssets.length > 0;
+
     // Filter to source files only
     const sourceFiles = allFiles.filter(f => !shouldIgnorePath(f) && !isWikiPromptExcludedPath(f) && isWikiCodeFilePath(f));
-    if (sourceFiles.length === 0) {
+    if (sourceFiles.length === 0 && this.blueprintAssets.length === 0) {
       throw new Error('No source files found in the knowledge graph. Nothing to document.');
     }
 
     // Build enriched file list (merge exports into all source files)
     const exportMap = new Map(filesWithExports.map(f => [f.filePath, f]));
-    const enrichedFiles: FileWithExports[] = sourceFiles.map(fp => {
+    let enrichedFiles: FileWithExports[] = sourceFiles.map(fp => {
       return exportMap.get(fp) || { filePath: fp, symbols: [] };
     });
 
-    this.onProgress('gather', 10, `Found ${sourceFiles.length} source files`);
+    // Include Blueprint assets in the enriched file list for module grouping
+    if (this.isUnrealProject) {
+      for (const bp of this.blueprintAssets) {
+        enrichedFiles.push({
+          filePath: bp.assetPath,
+          symbols: [{ name: bp.name, type: bp.label }],
+        });
+      }
+    }
+
+    // Apply wiki-specific exclusions
+    if (this.options.excludePatterns?.length) {
+      const before = enrichedFiles.length;
+      enrichedFiles = enrichedFiles.filter(f => !this.isWikiExcluded(f.filePath));
+      if (this.isUnrealProject) {
+        this.blueprintAssets = this.blueprintAssets.filter(bp => !this.isWikiExcluded(bp.assetPath));
+      }
+      const excluded = before - enrichedFiles.length;
+      if (excluded > 0) {
+        this.onProgress('gather', 8, `Excluded ${excluded} files (${this.options.excludePatterns.length} patterns)`);
+      }
+    }
+
+    const bpNote = this.isUnrealProject ? ` + ${this.blueprintAssets.length} Blueprints` : '';
+    this.onProgress('gather', 10, `Found ${enrichedFiles.length} files${bpNote}`);
 
     // Phase 1: Build module tree
     const moduleTree = await this.buildModuleTree(enrichedFiles);
@@ -366,6 +460,7 @@ export class WikiGenerator {
       moduleFiles,
       moduleTree,
       failedModules: this.failedModules.length > 0 ? [...this.failedModules] : undefined,
+      isUnrealProject: this.isUnrealProject || undefined,
     });
 
     this.onProgress('done', 100, 'Wiki generation complete');
@@ -450,6 +545,7 @@ export class WikiGenerator {
       moduleFiles,
       moduleTree,
       failedModules: this.failedModules.length > 0 ? [...this.failedModules] : undefined,
+      isUnrealProject: this.isUnrealProject || undefined,
     });
 
     this.onProgress('done', 100, 'Retry complete');
@@ -491,8 +587,12 @@ export class WikiGenerator {
 
       this.assertPromptWithinBudget(prompt, 'Grouping');
 
+      const systemPrompt = this.isUnrealProject
+        ? GROUPING_SYSTEM_PROMPT + GROUPING_UNREAL_ADDENDUM
+        : GROUPING_SYSTEM_PROMPT;
+
       const response = await callLLM(
-        prompt, this.llmConfig, GROUPING_SYSTEM_PROMPT,
+        prompt, this.llmConfig, systemPrompt,
         this.streamOpts('Grouping files', 15),
       );
       const grouping = this.parseGroupingResponse(response.content, files);
@@ -630,16 +730,37 @@ export class WikiGenerator {
   private async generateLeafPage(node: ModuleTreeNode): Promise<void> {
     const filePaths = node.files;
 
-    // Read source files from disk
-    const sourceCode = await this.readSourceFiles(filePaths);
+    // Partition into C++ source files and Blueprint asset paths
+    const cppFiles = filePaths.filter(fp => !isUnrealAssetPath(fp));
+    const bpAssetPaths = filePaths.filter(fp => isUnrealAssetPath(fp));
+    const hasBlueprintData = this.isUnrealProject && bpAssetPaths.length > 0;
+
+    // Read source files from disk (skip asset paths)
+    const sourceCode = await this.readSourceFiles(cppFiles);
+
+    const sourceTokenBudget = hasBlueprintData
+      ? Math.min(this.maxTokensPerModule, MAX_LEAF_SOURCE_TOKENS_WITH_BP)
+      : Math.min(this.maxTokensPerModule, MAX_LEAF_SOURCE_TOKENS);
 
     const finalSourceCode = truncateTextToTokenBudget(
       sourceCode,
-      Math.min(this.maxTokensPerModule, MAX_LEAF_SOURCE_TOKENS),
+      sourceTokenBudget,
       '\n\n... (source truncated for context window limits)',
     );
 
-    // Get graph data
+    // Build Blueprint data section if this module has Blueprints
+    let blueprintSection = '';
+    if (hasBlueprintData) {
+      const bpInfos = this.blueprintAssets.filter(bp => bpAssetPaths.includes(bp.assetPath));
+      const edgeData = await getBlueprintEdgesForAssets(bpAssetPaths);
+      blueprintSection = truncateTextToTokenBudget(
+        formatBlueprintSummaries(bpInfos, edgeData),
+        MAX_BLUEPRINT_SECTION_TOKENS,
+        '\n\n... (Blueprint data truncated)',
+      );
+    }
+
+    // Get graph data (pass ALL paths — both C++ and Blueprint — for cross-language edges)
     const [intraCalls, interCalls, processes] = await Promise.all([
       getIntraModuleCallEdges(filePaths),
       getInterModuleCallEdges(filePaths),
@@ -667,7 +788,8 @@ export class WikiGenerator {
       '\n... (processes truncated)',
     );
 
-    const prompt = fillTemplate(MODULE_USER_PROMPT, {
+    // Build prompt — append Blueprint section if present
+    let userPrompt = fillTemplate(MODULE_USER_PROMPT, {
       MODULE_NAME: node.name,
       SOURCE_CODE: finalSourceCode,
       INTRA_CALLS: intraCallsText,
@@ -676,10 +798,18 @@ export class WikiGenerator {
       PROCESSES: processesText,
     });
 
-    this.assertPromptWithinBudget(prompt, `Leaf module ${node.name}`);
+    if (blueprintSection) {
+      userPrompt += `\n\n## Blueprint Assets\n\n${blueprintSection}`;
+    }
+
+    this.assertPromptWithinBudget(userPrompt, `Leaf module ${node.name}`);
+
+    const systemPrompt = hasBlueprintData
+      ? MODULE_SYSTEM_PROMPT + MODULE_UNREAL_ADDENDUM
+      : MODULE_SYSTEM_PROMPT;
 
     const response = await callLLM(
-      prompt, this.llmConfig, MODULE_SYSTEM_PROMPT,
+      userPrompt, this.llmConfig, systemPrompt,
       this.streamOpts(node.name),
     );
 
@@ -799,17 +929,41 @@ export class WikiGenerator {
       '\n... (project info truncated)',
     );
 
-    const prompt = fillTemplate(OVERVIEW_USER_PROMPT, {
+    // Build Unreal context section if applicable
+    let unrealContext = '';
+    if (this.isUnrealProject) {
+      const [assetDist, tagSummary] = await Promise.all([
+        getBlueprintAssetDistribution(),
+        getGameplayTagSummary(20),
+      ]);
+
+      const parts: string[] = [];
+      const distText = formatAssetDistribution(assetDist);
+      if (distText) parts.push(`### Asset Distribution\n${distText}`);
+      const tagsText = formatGameplayTags(tagSummary);
+      if (tagSummary.length > 0) parts.push(`### Top Gameplay Tags\n${tagsText}`);
+      unrealContext = parts.join('\n\n');
+    }
+
+    let userPrompt = fillTemplate(OVERVIEW_USER_PROMPT, {
       PROJECT_INFO: trimmedProjectInfo,
       MODULE_SUMMARIES: trimmedModuleSummaries,
       MODULE_EDGES: trimmedEdgesText,
       TOP_PROCESSES: trimmedProcessesText,
     });
 
-    this.assertPromptWithinBudget(prompt, 'Overview');
+    if (unrealContext) {
+      userPrompt += `\n\n## Unreal Engine Context\n\n${unrealContext}`;
+    }
+
+    this.assertPromptWithinBudget(userPrompt, 'Overview');
+
+    const overviewSystemPrompt = this.isUnrealProject
+      ? OVERVIEW_SYSTEM_PROMPT + OVERVIEW_UNREAL_ADDENDUM
+      : OVERVIEW_SYSTEM_PROMPT;
 
     const response = await callLLM(
-      prompt, this.llmConfig, OVERVIEW_SYSTEM_PROMPT,
+      userPrompt, this.llmConfig, overviewSystemPrompt,
       this.streamOpts('Generating overview', 88),
     );
 
@@ -839,9 +993,29 @@ export class WikiGenerator {
 
     this.onProgress('incremental', 10, `${changedFiles.length} files changed`);
 
+    // Restore Unreal state from meta for incremental updates
+    if (existingMeta.isUnrealProject) {
+      this.isUnrealProject = true;
+      this.blueprintAssets = await getBlueprintAssets();
+    }
+
     // Determine affected modules
     const affectedModules = new Set<string>();
     const newFiles: string[] = [];
+
+    // Check for .uasset changes — these affect Blueprint-containing modules
+    const hasUassetChanges = changedFiles.some(fp => fp.endsWith('.uasset') || fp.endsWith('.umap'));
+    if (this.isUnrealProject && hasUassetChanges) {
+      // Re-query Blueprint assets and find modules that contain them
+      for (const bp of this.blueprintAssets) {
+        for (const [mod, files] of Object.entries(existingMeta.moduleFiles)) {
+          if (files.includes(bp.assetPath)) {
+            affectedModules.add(mod);
+            break;
+          }
+        }
+      }
+    }
 
     for (const fp of changedFiles) {
       let found = false;
@@ -852,7 +1026,7 @@ export class WikiGenerator {
           break;
         }
       }
-      if (!found && !shouldIgnorePath(fp) && !isWikiPromptExcludedPath(fp) && isWikiCodeFilePath(fp)) {
+      if (!found && !shouldIgnorePath(fp) && !isWikiPromptExcludedPath(fp) && isWikiCodeFilePath(fp) && !this.isWikiExcluded(fp)) {
         newFiles.push(fp);
       }
     }
@@ -992,6 +1166,30 @@ export class WikiGenerator {
     const candidates = ['package.json', 'Cargo.toml', 'pyproject.toml', 'go.mod', 'pom.xml', 'build.gradle'];
     const lines: string[] = [`Project: ${path.basename(this.repoPath)}`];
 
+    // Check for .uproject file (Unreal Engine project)
+    try {
+      const dirEntries = await fs.readdir(this.repoPath);
+      const uprojectFile = dirEntries.find(f => f.endsWith('.uproject'));
+      if (uprojectFile) {
+        const content = await fs.readFile(path.join(this.repoPath, uprojectFile), 'utf-8');
+        const proj = JSON.parse(content);
+        lines.push(`Engine: Unreal Engine ${proj.EngineAssociation || 'unknown'}`);
+        if (proj.Modules) {
+          const moduleNames = proj.Modules.map((m: { Name?: string }) => m.Name).filter(Boolean);
+          if (moduleNames.length > 0) lines.push(`C++ Modules: ${moduleNames.join(', ')}`);
+        }
+        if (proj.Plugins) {
+          const enabledPlugins = proj.Plugins
+            .filter((p: { Enabled?: boolean }) => p.Enabled)
+            .map((p: { Name?: string }) => p.Name)
+            .filter(Boolean);
+          if (enabledPlugins.length > 0) lines.push(`Enabled Plugins: ${enabledPlugins.slice(0, 20).join(', ')}${enabledPlugins.length > 20 ? ` (+${enabledPlugins.length - 20} more)` : ''}`);
+        }
+      }
+    } catch {
+      // No .uproject or parse error, continue
+    }
+
     for (const file of candidates) {
       const fullPath = path.join(this.repoPath, file);
       try {
@@ -1035,8 +1233,14 @@ export class WikiGenerator {
   private buildDeterministicModuleTree(files: FileWithExports[]): ModuleTreeNode[] {
     const topGroups = new Map<string, string[]>();
     for (const file of files) {
-      const normalized = file.filePath.replace(/\\/g, '/');
-      const topLevel = normalized.split('/')[0] || 'Root';
+      let topLevel: string;
+      if (isUnrealAssetPath(file.filePath)) {
+        // Use structured grouping key for UE asset paths
+        topLevel = assetPathToGroupingKey(file.filePath).split('/')[0] || 'Content';
+      } else {
+        const normalized = file.filePath.replace(/\\/g, '/');
+        topLevel = normalized.split('/')[0] || 'Root';
+      }
       const group = topGroups.get(topLevel) || [];
       group.push(file.filePath);
       topGroups.set(topLevel, group);

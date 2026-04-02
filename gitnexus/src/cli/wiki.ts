@@ -21,6 +21,27 @@ export interface WikiCommandOptions {
   apiKey?: string;
   concurrency?: string;
   gist?: boolean;
+  exclude?: string;
+}
+
+interface WikiConfig {
+  excludePatterns?: string[];
+}
+
+async function loadWikiConfig(storagePath: string): Promise<WikiConfig> {
+  try {
+    const raw = await (await import('fs/promises')).readFile(
+      path.join(storagePath, 'wiki', 'config.json'), 'utf-8',
+    );
+    return JSON.parse(raw);
+  } catch { return {}; }
+}
+
+async function saveWikiConfig(storagePath: string, config: WikiConfig): Promise<void> {
+  const dir = path.join(storagePath, 'wiki');
+  const fsp = await import('fs/promises');
+  await fsp.mkdir(dir, { recursive: true });
+  await fsp.writeFile(path.join(dir, 'config.json'), JSON.stringify(config, null, 2), 'utf-8');
 }
 
 /**
@@ -236,12 +257,41 @@ export const wikiCommand = async (
     }
   }, 1000);
 
+  // ── Resolve exclude patterns (CLI flag + saved config) ──────────────
+  const wikiConfig = await loadWikiConfig(storagePath);
+  let excludePatterns: string[] | undefined = wikiConfig.excludePatterns;
+
+  if (options?.exclude !== undefined) {
+    // CLI flag provided — parse and persist
+    excludePatterns = options.exclude
+      ? options.exclude.split(',').map(p => p.trim()).filter(Boolean)
+      : undefined; // empty string clears exclusions
+    const newConfig: WikiConfig = { ...wikiConfig, excludePatterns };
+    if (!excludePatterns) delete newConfig.excludePatterns;
+    await saveWikiConfig(storagePath, newConfig);
+
+    if (excludePatterns?.length) {
+      console.log(`  Exclude patterns saved: ${excludePatterns.join(', ')}`);
+    } else {
+      console.log('  Exclude patterns cleared.');
+    }
+
+    // Invalidate stale module tree when exclusions change
+    try {
+      const fsp = await import('fs/promises');
+      await fsp.unlink(path.join(storagePath, 'wiki', 'first_module_tree.json'));
+    } catch {}
+  } else if (excludePatterns?.length) {
+    console.log(`  Using saved exclude patterns: ${excludePatterns.join(', ')}`);
+  }
+
   // ── Run generator ───────────────────────────────────────────────────
   const wikiOptions: WikiOptions = {
     force: options?.force,
     model: options?.model,
     baseUrl: options?.baseUrl,
     concurrency: options?.concurrency ? parseInt(options.concurrency, 10) : undefined,
+    excludePatterns,
   };
 
   const generator = new WikiGenerator(

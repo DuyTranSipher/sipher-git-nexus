@@ -36,6 +36,12 @@ const AST_CACHE_CAP = 50;
 export interface PipelineOptions {
   /** Skip MRO, community detection, and process extraction for faster test runs. */
   skipGraphPhases?: boolean;
+  /** Override worker pool sub-batch size (files per postMessage). Default: 1500. */
+  workerSubBatchSize?: number;
+  /** Override worker pool per-sub-batch timeout in ms. Default: 30000. */
+  workerTimeoutMs?: number;
+  /** Override max file size filter in KB. Default: 512. */
+  maxFileSizeKb?: number;
 }
 
 export const runPipelineFromRepo = async (
@@ -70,7 +76,7 @@ export const runPipelineFromRepo = async (
         detail: filePath,
         stats: { filesProcessed: current, totalFiles: total, nodesCreated: graph.nodeCount },
       });
-    });
+    }, options?.maxFileSizeKb);
 
     const totalFiles = scannedFiles.length;
 
@@ -179,7 +185,10 @@ export const runPipelineFromRepo = async (
             workerUrl = pathToFileURL(distWorker) as URL;
           }
         }
-        workerPool = createWorkerPool(workerUrl);
+        workerPool = createWorkerPool(workerUrl, undefined, {
+          subBatchSize: options?.workerSubBatchSize,
+          timeoutMs: options?.workerTimeoutMs,
+        });
       } catch (err) {
         if (isDev) console.warn('Worker pool creation failed, using sequential fallback:', (err as Error).message);
       }

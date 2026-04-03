@@ -28,10 +28,17 @@ const SUB_BATCH_SIZE = 1500;
  *  likely a pathological file (e.g. minified 50MB JS). Fail fast. */
 const SUB_BATCH_TIMEOUT_MS = 30_000;
 
+export interface WorkerPoolOptions {
+  /** Override SUB_BATCH_SIZE. Default: 1500. */
+  subBatchSize?: number;
+  /** Override SUB_BATCH_TIMEOUT_MS. Default: 30000. */
+  timeoutMs?: number;
+}
+
 /**
  * Create a pool of worker threads.
  */
-export const createWorkerPool = (workerUrl: URL, poolSize?: number): WorkerPool => {
+export const createWorkerPool = (workerUrl: URL, poolSize?: number, opts?: WorkerPoolOptions): WorkerPool => {
   // Validate worker script exists before spawning to prevent uncaught
   // MODULE_NOT_FOUND crashes in worker threads (e.g. when running from src/ via vitest)
   const workerPath = fileURLToPath(workerUrl);
@@ -45,6 +52,9 @@ export const createWorkerPool = (workerUrl: URL, poolSize?: number): WorkerPool 
   for (let i = 0; i < size; i++) {
     workers.push(new Worker(workerUrl));
   }
+
+  const resolvedSubBatchSize = opts?.subBatchSize ?? SUB_BATCH_SIZE;
+  const resolvedTimeoutMs = opts?.timeoutMs ?? SUB_BATCH_TIMEOUT_MS;
 
   const dispatch = <TInput, TResult>(items: TInput[], onProgress?: (filesProcessed: number) => void): Promise<TResult[]> => {
     if (items.length === 0) return Promise.resolve([]);
@@ -76,20 +86,20 @@ export const createWorkerPool = (workerUrl: URL, poolSize?: number): WorkerPool 
             if (!settled) {
               settled = true;
               cleanup();
-              reject(new Error(`Worker ${i} sub-batch timed out after ${SUB_BATCH_TIMEOUT_MS / 1000}s (chunk: ${chunk.length} items).`));
+              reject(new Error(`Worker ${i} sub-batch timed out after ${resolvedTimeoutMs / 1000}s (chunk: ${chunk.length} items).`));
             }
-          }, SUB_BATCH_TIMEOUT_MS);
+          }, resolvedTimeoutMs);
         };
 
         let subBatchIdx = 0;
 
         const sendNextSubBatch = () => {
-          const start = subBatchIdx * SUB_BATCH_SIZE;
+          const start = subBatchIdx * resolvedSubBatchSize;
           if (start >= chunk.length) {
             worker.postMessage({ type: 'flush' });
             return;
           }
-          const subBatch = chunk.slice(start, start + SUB_BATCH_SIZE);
+          const subBatch = chunk.slice(start, start + resolvedSubBatchSize);
           subBatchIdx++;
           resetSubBatchTimer();
           worker.postMessage({ type: 'sub-batch', files: subBatch });

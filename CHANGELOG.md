@@ -2,6 +2,12 @@
 
 All notable changes to GitNexus will be documented in this file.
 
+## [1.5.1] - 2026-04-03
+
+### Added
+
+- **Unreal analyze tuning via `.gitnexus-unreal.json`**: New `analyze` block supports `worker_sub_batch_size`, `worker_timeout_ms`, and `max_file_size_kb` to prevent worker pool timeouts on large Unreal C++ projects
+
 ## [1.5.0] - 2026-04-02
 
 ### Added

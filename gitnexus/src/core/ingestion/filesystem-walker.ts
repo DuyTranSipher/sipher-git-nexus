@@ -30,9 +30,11 @@ const MAX_FILE_SIZE = 512 * 1024;
  */
 export const walkRepositoryPaths = async (
   repoPath: string,
-  onProgress?: (current: number, total: number, filePath: string) => void
+  onProgress?: (current: number, total: number, filePath: string) => void,
+  maxFileSizeKb?: number,
 ): Promise<ScannedFile[]> => {
   const ignoreFilter = await createIgnoreFilter(repoPath);
+  const maxFileSize = maxFileSizeKb !== undefined ? maxFileSizeKb * 1024 : MAX_FILE_SIZE;
 
   const filtered = await glob('**/*', {
     cwd: repoPath,
@@ -50,7 +52,7 @@ export const walkRepositoryPaths = async (
       batch.map(async relativePath => {
         const fullPath = path.join(repoPath, relativePath);
         const stat = await fs.stat(fullPath);
-        if (stat.size > MAX_FILE_SIZE) {
+        if (stat.size > maxFileSize) {
           skippedLarge++;
           return null;
         }
@@ -70,7 +72,7 @@ export const walkRepositoryPaths = async (
   }
 
   if (skippedLarge > 0) {
-    console.warn(`  Skipped ${skippedLarge} large files (>${MAX_FILE_SIZE / 1024}KB, likely generated/vendored)`);
+    console.warn(`  Skipped ${skippedLarge} large files (>${maxFileSize / 1024}KB, likely generated/vendored)`);
   }
 
   return entries;

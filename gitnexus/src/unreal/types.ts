@@ -57,6 +57,27 @@ export interface UnrealConfig {
    * glob patterns ("**\/ST_*"), or "regex:" patterns.
    */
   include_paths?: string[];
+  /**
+   * Tuning knobs for the `gitnexus analyze` pipeline.
+   * Useful for large Unreal projects where default limits are too tight.
+   */
+  analyze?: {
+    /**
+     * Max files sent to a worker in one postMessage.
+     * Default: 1500. Recommended for large UE projects: 300.
+     */
+    worker_sub_batch_size?: number;
+    /**
+     * Per-sub-batch timeout in milliseconds before falling back to sequential parsing.
+     * Default: 30000. Recommended for large UE projects: 120000.
+     */
+    worker_timeout_ms?: number;
+    /**
+     * Skip files larger than this many KB during scanning.
+     * Default: 512. Recommended for large UE projects: 256 (drops generated headers).
+     */
+    max_file_size_kb?: number;
+  };
 }
 
 export interface UnrealStoragePaths {

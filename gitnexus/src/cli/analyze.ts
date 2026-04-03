@@ -202,12 +202,25 @@ export const analyzeCommand = async (
     }
   }
 
+  // Load Unreal config to pick up analyze tuning (worker_sub_batch_size, etc.)
+  let unrealAnalyzeTuning: { workerSubBatchSize?: number; workerTimeoutMs?: number; maxFileSizeKb?: number } = {};
+  try {
+    const { loadUnrealConfig } = await import('../unreal/config.js');
+    const unrealConfig = await loadUnrealConfig(storagePath, repoPath);
+    if (unrealConfig?.analyze) {
+      const a = unrealConfig.analyze;
+      if (a.worker_sub_batch_size !== undefined) unrealAnalyzeTuning.workerSubBatchSize = a.worker_sub_batch_size;
+      if (a.worker_timeout_ms !== undefined) unrealAnalyzeTuning.workerTimeoutMs = a.worker_timeout_ms;
+      if (a.max_file_size_kb !== undefined) unrealAnalyzeTuning.maxFileSizeKb = a.max_file_size_kb;
+    }
+  } catch { /* not an Unreal project or config missing — ignore */ }
+
   // ── Phase 1: Full Pipeline (0–60%) ─────────────────────────────────
   const pipelineResult = await runPipelineFromRepo(repoPath, (progress) => {
     const phaseLabel = PHASE_LABELS[progress.phase] || progress.phase;
     const scaled = Math.round(progress.percent * 0.6);
     updateBar(scaled, phaseLabel);
-  });
+  }, unrealAnalyzeTuning);
 
   // ── Phase 1.5: Blueprint Ingestion (optional) ────────────────────────
   try {

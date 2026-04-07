@@ -562,6 +562,20 @@ function scanUEMacros(content: string): Map<number, UEMacroInfo> {
   return macros;
 }
 
+/**
+ * Strip UE-style DLL export macros (*_API) from C++ class and struct declarations
+ * before tree-sitter parsing. Without this, tree-sitter captures the macro identifier
+ * (e.g. SIPHERARTIFACTSMANAGERRUNTIME_API) as the class name instead of the real name.
+ *
+ * Example: `class MYMODULE_API UMyClass : public UObject`
+ *       →  `class UMyClass : public UObject`
+ *
+ * Line numbers are preserved — only same-line tokens are removed, no newlines affected.
+ */
+function stripCppApiMacros(content: string): string {
+  return content.replace(/\b(class|struct)\s+[A-Z][A-Z0-9_]*_API\s+/g, '$1 ');
+}
+
 // ============================================================================
 // Laravel Route Extraction (procedural AST walk)
 // ============================================================================
@@ -961,7 +975,11 @@ const processFileGroup = (
 
     let tree;
     try {
-      tree = parser.parse(file.content, undefined, { bufferSize: getTreeSitterBufferSize(file.content.length) });
+      // C/C++: strip *_API DLL-export macros so tree-sitter captures the real class name
+      const parseContent = (language === SupportedLanguages.CPlusPlus || language === SupportedLanguages.C)
+        ? stripCppApiMacros(file.content)
+        : file.content;
+      tree = parser.parse(parseContent, undefined, { bufferSize: getTreeSitterBufferSize(file.content.length) });
     } catch (err) {
       console.warn(`Failed to parse file ${file.path}: ${err instanceof Error ? err.message : String(err)}`);
       continue;

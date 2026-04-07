@@ -17,6 +17,7 @@ public class GitNexusUnreal : ModuleRules
         {
             "AssetRegistry",
             "BlueprintGraph",
+            "GameplayTags",
             "Json",
             "JsonUtilities",
             "Kismet",

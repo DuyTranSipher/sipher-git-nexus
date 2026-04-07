@@ -2,6 +2,12 @@
 
 All notable changes to GitNexus will be documented in this file.
 
+## [1.5.3] - 2026-04-07
+
+### Fixed
+
+- **Unreal plugin build**: Added `GameplayTags` to `PrivateDependencyModuleNames` in `GitNexusUnreal.Build.cs` — fixes `LNK2019` linker errors for `FGameplayTag::StaticStruct` and `FGameplayTagContainer::StaticStruct` when compiling the editor target
+
 ## [1.5.2] - 2026-04-07
 
 ### Added

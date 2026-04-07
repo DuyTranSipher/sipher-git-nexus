@@ -2,6 +2,17 @@
 
 All notable changes to GitNexus will be documented in this file.
 
+## [1.5.2] - 2026-04-07
+
+### Added
+
+- **`gitnexus unreal setup`**: Single command that does the full Unreal first-time setup — detects `.uproject`, copies the bundled plugin, invokes `UnrealBuildTool` to compile the editor DLL, then runs a deep Blueprint sync. Replaces the previous multi-step manual workflow.
+- **Interactive editor path prompt**: When `UnrealEditor-Cmd.exe` cannot be auto-detected, `gitnexus unreal setup` prompts for the path interactively and validates it before continuing — no need to restart with `--editor-cmd`.
+
+### Removed
+
+- **`gitnexus setup --unreal`**: Removed the `--unreal`, `--project`, `--editor-cmd`, and `--force` flags from `gitnexus setup`. Use `gitnexus unreal setup` instead. `gitnexus setup` is now MCP-only.
+
 ## [1.5.1] - 2026-04-03
 
 ### Added

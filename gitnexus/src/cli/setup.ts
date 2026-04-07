@@ -7,14 +7,11 @@
  */
 
 import fs from 'fs/promises';
-import fsSync from 'fs';
 import path from 'path';
 import os from 'os';
-import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { glob } from 'glob';
 import { getGlobalDir } from '../storage/repo-manager.js';
-import type { UnrealConfig } from '../unreal/types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -359,217 +356,10 @@ async function installOpenCodeSkills(result: SetupResult): Promise<void> {
   }
 }
 
-// ─── Unreal Engine setup ──────────────────────────────────────────
-
-interface UnrealSetupOptions {
-  project?: string;
-  editorCmd?: string;
-  force?: boolean;
-}
-
-async function findUProjectFile(projectRoot: string): Promise<string> {
-  const entries = await fs.readdir(projectRoot);
-  const uprojects = entries.filter(e => e.endsWith('.uproject'));
-  if (uprojects.length === 0) {
-    throw new Error(`No .uproject file found in ${projectRoot}. Use --project to specify the UE project root.`);
-  }
-  if (uprojects.length > 1) {
-    throw new Error(`Multiple .uproject files in ${projectRoot}: ${uprojects.join(', ')}. Move into the correct project directory or use --project.`);
-  }
-  return path.join(projectRoot, uprojects[0]);
-}
-
-function resolveEditorCmd(explicitPath: string | undefined, engineAssociation: string): string {
-  if (explicitPath) {
-    const resolved = path.resolve(explicitPath);
-    try {
-      fsSync.accessSync(resolved);
-    } catch {
-      throw new Error(`Editor command not found: ${resolved}`);
-    }
-    return resolved;
-  }
-
-  if (process.platform !== 'win32') {
-    throw new Error('Auto-detection of UnrealEditor-Cmd is only supported on Windows. Use --editor-cmd.');
-  }
-
-  const tryCandidates = (rootOrExe: string): string | null => {
-    const candidates = [
-      rootOrExe,
-      path.join(rootOrExe, 'Engine', 'Binaries', 'Win64', 'UnrealEditor-Cmd.exe'),
-      path.join(rootOrExe, 'Engine', 'Windows', 'Engine', 'Binaries', 'Win64', 'UnrealEditor-Cmd.exe'),
-    ];
-    for (const c of candidates) {
-      try {
-        const stat = fsSync.statSync(c);
-        if (stat.isFile()) return c;
-      } catch { /* next */ }
-    }
-    return null;
-  };
-
-  // Try registry lookup for source builds (GUID engine association)
-  if (engineAssociation) {
-    try {
-      const regQuery = `reg query "HKCU\\Software\\Epic Games\\Unreal Engine\\Builds" /v "${engineAssociation}" 2>nul`;
-      const output = execSync(regQuery, { encoding: 'utf-8' });
-      const match = output.match(/REG_SZ\s+(.+)/);
-      if (match) {
-        const found = tryCandidates(match[1].trim());
-        if (found) return found;
-      }
-    } catch { /* registry key not found */ }
-
-    // Try LauncherInstalled.dat (Epic Games Launcher writes this for all engine installs)
-    try {
-      const launcherDat = path.join(
-        process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
-        'EpicGames', 'UnrealEngineLauncher', 'LauncherInstalled.dat'
-      );
-      const launcher = JSON.parse(fsSync.readFileSync(launcherDat, 'utf-8'));
-      if (Array.isArray(launcher.InstallationList)) {
-        for (const entry of launcher.InstallationList) {
-          if (entry.AppName === `UE_${engineAssociation}` || entry.AppName === engineAssociation) {
-            const found = tryCandidates(entry.InstallLocation);
-            if (found) return found;
-          }
-        }
-      }
-    } catch { /* LauncherInstalled.dat not found or unparseable */ }
-
-    // Try standard install path
-    const found = tryCandidates(path.join('C:\\Program Files\\Epic Games', `UE_${engineAssociation}`));
-    if (found) return found;
-  }
-
-  throw new Error(
-    `Could not auto-detect UnrealEditor-Cmd.exe for EngineAssociation '${engineAssociation}'. Use --editor-cmd to specify it.`
-  );
-}
-
-async function setupUnreal(options: UnrealSetupOptions, result: SetupResult): Promise<void> {
-  const projectRoot = path.resolve(options.project || process.cwd());
-
-  try {
-    const stat = await fs.stat(projectRoot);
-    if (!stat.isDirectory()) throw new Error('not a directory');
-  } catch {
-    result.errors.push(`Unreal: project root not found: ${projectRoot}`);
-    return;
-  }
-
-  let uprojectPath: string;
-  try {
-    uprojectPath = await findUProjectFile(projectRoot);
-  } catch (err: any) {
-    result.errors.push(`Unreal: ${err.message}`);
-    return;
-  }
-
-  // Read engine association from .uproject
-  let engineAssociation = '';
-  try {
-    const uproject = JSON.parse(await fs.readFile(uprojectPath, 'utf-8'));
-    engineAssociation = uproject.EngineAssociation || '';
-  } catch (err: any) {
-    result.errors.push(`Unreal: failed to read ${path.basename(uprojectPath)}: ${err.message}`);
-    return;
-  }
-
-  // Resolve editor command
-  let editorCmd: string;
-  try {
-    editorCmd = resolveEditorCmd(options.editorCmd, engineAssociation);
-  } catch (err: any) {
-    result.errors.push(`Unreal: ${err.message}`);
-    return;
-  }
-
-  // Paths
-  const pluginDest = path.join(projectRoot, 'Plugins', 'GitNexusUnreal');
-  const gitnexusDir = path.join(projectRoot, '.gitnexus');
-  const unrealDir = path.join(gitnexusDir, 'unreal');
-  const configPath = path.join(unrealDir, 'config.json');
-
-  // Check existing installation
-  const pluginExists = await dirExists(pluginDest);
-  const configExists = await fileExists(configPath) || await fileExists(path.join(projectRoot, '.gitnexus-unreal.json'));
-
-  if ((pluginExists || configExists) && !options.force) {
-    result.errors.push(
-      `Unreal: plugin or config already exists in ${projectRoot}. Use --force to overwrite.`
-    );
-    return;
-  }
-
-  // Copy bundled plugin
-  const bundledPlugin = path.join(__dirname, '..', '..', 'vendor', 'GitNexusUnreal');
-  if (!(await dirExists(bundledPlugin))) {
-    result.errors.push('Unreal: bundled plugin not found in vendor/GitNexusUnreal');
-    return;
-  }
-
-  try {
-    if (pluginExists) {
-      await fs.rm(pluginDest, { recursive: true, force: true });
-    }
-    await fs.mkdir(path.join(projectRoot, 'Plugins'), { recursive: true });
-    await copyDirRecursive(bundledPlugin, pluginDest);
-  } catch (err: any) {
-    result.errors.push(`Unreal: failed to copy plugin: ${err.message}`);
-    return;
-  }
-
-  // Write config — split into shared (project root, committable) and local (gitignored)
-  // Preserve existing values when re-running with --force
-  const sharedConfigPath = path.join(projectRoot, '.gitnexus-unreal.json');
-  try {
-    // Read existing configs to preserve user customizations
-    let existingShared: Record<string, unknown> = {};
-    let existingLocal: Record<string, unknown> = {};
-    try { existingShared = JSON.parse(await fs.readFile(sharedConfigPath, 'utf-8')); } catch { /* fresh install */ }
-    try { existingLocal = JSON.parse(await fs.readFile(configPath, 'utf-8')); } catch { /* fresh install */ }
-
-    // Shared config: merge defaults under existing values (existing wins)
-    const sharedDefaults = {
-      commandlet: 'GitNexusBlueprintAnalyzer',
-      timeout_ms: 300000,
-    };
-    const sharedConfig = { ...sharedDefaults, ...existingShared };
-    await fs.writeFile(sharedConfigPath, JSON.stringify(sharedConfig, null, 2) + '\n', 'utf-8');
-
-    // Local config: always update editor_cmd/project_path, preserve other local overrides
-    await fs.mkdir(unrealDir, { recursive: true });
-    const localConfig = {
-      ...existingLocal,
-      editor_cmd: editorCmd.replace(/\\/g, '/'),
-      project_path: uprojectPath.replace(/\\/g, '/'),
-    };
-    await fs.writeFile(configPath, JSON.stringify(localConfig, null, 2) + '\n', 'utf-8');
-  } catch (err: any) {
-    result.errors.push(`Unreal: failed to write config: ${err.message}`);
-    return;
-  }
-
-  result.configured.push(`Unreal plugin → ${pluginDest}`);
-  result.configured.push(`Unreal config (shared) → ${sharedConfigPath}`);
-  result.configured.push(`Unreal config (local) → ${configPath}`);
-  console.log(`    Editor: ${editorCmd}`);
-}
-
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    const stat = await fs.stat(filePath);
-    return stat.isFile();
-  } catch {
-    return false;
-  }
-}
 
 // ─── Main command ──────────────────────────────────────────────────
 
-export const setupCommand = async (options: { unreal?: boolean; project?: string; editorCmd?: string; force?: boolean }) => {
+export const setupCommand = async (_options?: Record<string, unknown>) => {
   console.log('');
   console.log('  GitNexus Setup');
   console.log('  ==============');
@@ -595,13 +385,6 @@ export const setupCommand = async (options: { unreal?: boolean; project?: string
   await installClaudeCodeHooks(result);
   await installCursorSkills(result);
   await installOpenCodeSkills(result);
-
-  // Unreal Engine plugin setup (optional)
-  if (options.unreal) {
-    console.log('  Unreal Engine Setup');
-    console.log('  -------------------');
-    await setupUnreal({ project: options.project, editorCmd: options.editorCmd, force: options.force }, result);
-  }
 
   // Print results
   if (result.configured.length > 0) {
@@ -636,12 +419,6 @@ export const setupCommand = async (options: { unreal?: boolean; project?: string
   console.log('    1. cd into any git repo');
   console.log('    2. Run: gitnexus analyze');
   console.log('    3. Open the repo in your editor — MCP is ready!');
-  if (options.unreal) {
-    console.log('');
-    console.log('  Unreal next steps:');
-    console.log('    1. Build your Unreal editor target (so the commandlet compiles)');
-    console.log('    2. Run: gitnexus analyze     (index the C++ codebase)');
-    console.log('    3. Run: gitnexus unreal-sync  (scan Blueprint assets)');
-  }
+  console.log('    To index an Unreal project: gitnexus unreal setup');
   console.log('');
 };

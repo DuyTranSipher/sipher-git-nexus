@@ -7,9 +7,16 @@
 
 import fs from 'fs/promises';
 import path from 'path';
+import { createInterface } from 'readline/promises';
 import { getStoragePaths } from '../storage/repo-manager.js';
 import { getGitRoot } from '../storage/git.js';
 import type { UnrealConfig } from '../unreal/types.js';
+import {
+  findUProjectFile,
+  resolveEditorCmd,
+  installUnrealPlugin,
+  buildUnrealPlugin,
+} from '../unreal/plugin-setup.js';
 
 // ─── init ──────────────────────────────────────────────────────────────
 
@@ -244,5 +251,120 @@ export async function unrealStatusCommand(options?: {
     } catch { /* plugin file not found */ }
   }
 
+  console.log('');
+}
+
+// ─── setup ─────────────────────────────────────────────────────────
+
+async function promptForEditorCmd(): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    while (true) {
+      const answer = await rl.question('  Path to UnrealEditor-Cmd.exe: ');
+      const trimmed = answer.trim();
+      if (!trimmed) continue;
+      try {
+        await fs.access(trimmed);
+        return trimmed;
+      } catch {
+        console.log(`  Not found: ${trimmed}`);
+      }
+    }
+  } finally {
+    rl.close();
+  }
+}
+
+export async function unrealSetupCommand(options?: {
+  project?: string;
+  editorCmd?: string;
+  force?: boolean;
+}): Promise<void> {
+  const projectRoot = path.resolve(options?.project || process.cwd());
+
+  // Validate project root
+  try {
+    const stat = await fs.stat(projectRoot);
+    if (!stat.isDirectory()) throw new Error('not a directory');
+  } catch {
+    console.error(`Error: Project root not found: ${projectRoot}`);
+    process.exit(1);
+  }
+
+  // Find .uproject
+  let uprojectPath: string;
+  try {
+    uprojectPath = await findUProjectFile(projectRoot);
+  } catch (err: any) {
+    console.error(`Error: ${err.message}`);
+    process.exit(1);
+  }
+
+  const projectName = path.basename(uprojectPath, '.uproject');
+
+  // Read engine association from .uproject
+  let engineAssociation = '';
+  try {
+    const uproject = JSON.parse(await fs.readFile(uprojectPath, 'utf-8'));
+    engineAssociation = uproject.EngineAssociation || '';
+  } catch (err: any) {
+    console.error(`Error: Failed to read ${path.basename(uprojectPath)}: ${err.message}`);
+    process.exit(1);
+  }
+
+  // Resolve editor_cmd — fall back to interactive prompt if auto-detection fails
+  let editorCmd: string;
+  try {
+    editorCmd = resolveEditorCmd(options?.editorCmd, engineAssociation);
+  } catch {
+    console.log('  Could not auto-detect UnrealEditor-Cmd.exe.');
+    console.log('  Tip: it lives at <EngineRoot>/Engine/Binaries/Win64/UnrealEditor-Cmd.exe');
+    console.log('');
+    editorCmd = await promptForEditorCmd();
+  }
+
+  console.log('');
+  console.log(`  Project:  ${projectName}`);
+  console.log(`  Editor:   ${editorCmd}`);
+  console.log('');
+
+  // Step 1: Install plugin + write config
+  console.log('  [1/3] Installing plugin...');
+  try {
+    const installed = await installUnrealPlugin({
+      projectRoot,
+      editorCmd,
+      uprojectPath,
+      force: options?.force,
+    });
+    console.log(`        Plugin  → ${installed.pluginDest}`);
+    console.log(`        Config  → ${installed.localConfigPath}`);
+  } catch (err: any) {
+    console.error(`Error: ${err.message}`);
+    process.exit(1);
+  }
+
+  // Step 2: Build editor target via UnrealBuildTool
+  console.log('');
+  console.log(`  [2/3] Building ${projectName}Editor (this may take several minutes)...`);
+  console.log('');
+  try {
+    await buildUnrealPlugin(editorCmd, projectName, uprojectPath);
+  } catch (err: any) {
+    console.error('');
+    console.error(`Error: Build failed — ${err.message}`);
+    console.error('  Fix the build error above, then re-run: gitnexus unreal setup --force');
+    process.exit(1);
+  }
+
+  // Step 3: Sync Blueprint assets (deep mode)
+  console.log('');
+  console.log('  [3/3] Syncing Blueprint assets...');
+  console.log('');
+  await unrealSyncCommand({ deep: true });
+
+  console.log('');
+  console.log('  Setup complete!');
+  console.log('  Run: gitnexus analyze   to index the C++ codebase');
   console.log('');
 }

@@ -19,10 +19,6 @@ program
 program
   .command('setup')
   .description('One-time setup: configure MCP for Cursor, Claude Code, OpenCode')
-  .option('--unreal', 'Also install the GitNexus Unreal Engine plugin into a UE project')
-  .option('--project <path>', 'UE project root (default: current directory, used with --unreal)')
-  .option('--editor-cmd <path>', 'Path to UnrealEditor-Cmd.exe (auto-detected if omitted)')
-  .option('--force', 'Overwrite existing Unreal plugin/config if present')
   .action(createLazyAction(() => import('./setup.js'), 'setupCommand'));
 
 program
@@ -128,6 +124,14 @@ program
 const unrealCmd = program
   .command('unreal')
   .description('Unreal Engine project management');
+
+unrealCmd
+  .command('setup')
+  .description('Full setup: install plugin, build editor target, sync Blueprint assets')
+  .option('--project <path>', 'UE project root (default: current directory)')
+  .option('--editor-cmd <path>', 'Path to UnrealEditor-Cmd.exe (auto-detected if omitted)')
+  .option('--force', 'Overwrite existing plugin/config if present')
+  .action(createLazyAction(() => import('./unreal.js'), 'unrealSetupCommand'));
 
 unrealCmd
   .command('init')

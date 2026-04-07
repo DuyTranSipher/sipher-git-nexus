@@ -18,6 +18,32 @@ export interface BlueprintIngestionResult {
   edgesAdded: number;
 }
 
+/**
+ * Tokenize an Unreal asset name for FTS indexability.
+ * LadybugDB's FTS tokenizer splits on whitespace only — underscores are
+ * treated as word characters, so "GA_ArtifactCombo_GenericAbility" is one
+ * opaque token. This function produces a space-separated list of subwords
+ * suitable for porter-stemmer matching.
+ *
+ * "GA_ArtifactCombo_GenericAbility" →
+ *   "GA Artifact Combo Generic Ability ga artifact combo generic ability"
+ */
+export const tokenizeBlueprintName = (name: string): string => {
+  // Split on underscores first
+  const underscoreParts = name.split('_').filter(Boolean);
+  // Split each part on camelCase boundaries
+  const words = underscoreParts.flatMap(p =>
+    p.replace(/([A-Z][a-z])/g, ' $1')
+     .replace(/([a-z])([A-Z])/g, '$1 $2')
+     .trim()
+     .split(/\s+/)
+     .filter(Boolean)
+  );
+  // Combine original parts + split words + lowercase variants for stemming
+  const all = [...new Set([...underscoreParts, ...words])];
+  return [...all, ...all.map(w => w.toLowerCase())].join(' ');
+};
+
 /** Extract a display name from an Unreal asset path (last segment). */
 const extractAssetName = (assetPath: string): string => {
   // "/Game/Characters/BP_Hero" → "BP_Hero"
@@ -185,7 +211,9 @@ export const ingestBlueprintsIntoGraph = async (
         filePath: asset.asset_path,
         startLine: -1,
         endLine: -1,
-        description: asset.generated_class || '',
+        // Tokenized name enables FTS to match underscore/camelCase terms individually.
+        // e.g. "GA_ArtifactCombo_GenericAbility" → "GA Artifact Combo Generic Ability ..."
+        description: tokenizeBlueprintName(bpName) + (asset.generated_class ? ' ' + asset.generated_class : ''),
         ueAssetClass: asset.asset_class,
       },
     });

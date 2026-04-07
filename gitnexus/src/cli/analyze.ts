@@ -9,7 +9,7 @@ import { execFileSync } from 'child_process';
 import v8 from 'v8';
 import cliProgress from 'cli-progress';
 import { runPipelineFromRepo } from '../core/ingestion/pipeline.js';
-import { initLbug, loadGraphToLbug, getLbugStats, executeQuery, executeWithReusedStatement, closeLbug, createFTSIndex, loadCachedEmbeddings } from '../core/lbug/lbug-adapter.js';
+import { initLbug, loadGraphToLbug, getLbugStats, executeQuery, executeWithReusedStatement, closeLbug, createFTSIndex, dropFTSIndex, loadCachedEmbeddings } from '../core/lbug/lbug-adapter.js';
 // Embedding imports are lazy (dynamic import) so onnxruntime-node is never
 // loaded when embeddings are not requested. This avoids crashes on Node
 // versions whose ABI is not yet supported by the native binary (#89).
@@ -283,14 +283,24 @@ export const analyzeCommand = async (
     await createFTSIndex('Class', 'class_fts', ['name', 'content']);
     await createFTSIndex('Method', 'method_fts', ['name', 'content']);
     await createFTSIndex('Interface', 'interface_fts', ['name', 'content']);
-    await createFTSIndex('Blueprint', 'blueprint_fts', ['name', 'content']);
-    await createFTSIndex('AnimBlueprint', 'animblueprint_fts', ['name', 'content']);
-    await createFTSIndex('WidgetBlueprint', 'widgetblueprint_fts', ['name', 'content']);
-    await createFTSIndex('GameplayAbility', 'gameplayability_fts', ['name', 'content']);
-    await createFTSIndex('GameplayEffect', 'gameplayeffect_fts', ['name', 'content']);
-    await createFTSIndex('StateTree', 'statetree_fts', ['name', 'content']);
-    await createFTSIndex('DataTable', 'datatable_fts', ['name', 'content']);
-    await createFTSIndex('DataAsset', 'dataasset_fts', ['name', 'content']);
+    // Blueprint types index 'description' which holds tokenized names for FTS.
+    // e.g. "GA_ArtifactCombo_GenericAbility" → "GA Artifact Combo Generic Ability ..."
+    // This enables matching underscore/camelCase asset names via porter stemmer.
+    // Always drop before recreating — COPY replaces table data but leaves stale index structures.
+    const bpIndexes: [string, string][] = [
+      ['Blueprint', 'blueprint_fts'],
+      ['AnimBlueprint', 'animblueprint_fts'],
+      ['WidgetBlueprint', 'widgetblueprint_fts'],
+      ['GameplayAbility', 'gameplayability_fts'],
+      ['GameplayEffect', 'gameplayeffect_fts'],
+      ['StateTree', 'statetree_fts'],
+      ['DataTable', 'datatable_fts'],
+      ['DataAsset', 'dataasset_fts'],
+    ];
+    for (const [table, index] of bpIndexes) {
+      await dropFTSIndex(table, index);
+      await createFTSIndex(table, index, ['name', 'description', 'content']);
+    }
   } catch (e: any) {
     // Non-fatal — FTS is best-effort
   }

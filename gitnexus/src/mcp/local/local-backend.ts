@@ -60,7 +60,8 @@ export const VALID_NODE_LABELS = new Set([
   'Community', 'Process', 'Struct', 'Enum', 'Macro', 'Typedef', 'Union',
   'Namespace', 'Trait', 'Impl', 'TypeAlias', 'Const', 'Static', 'Property',
   'Record', 'Delegate', 'Annotation', 'Constructor', 'Template', 'Module',
-  'Blueprint',
+  'Blueprint', 'AnimBlueprint', 'WidgetBlueprint', 'GameplayAbility', 'GameplayEffect',
+  'StateTree', 'DataTable', 'DataAsset', 'GameplayTag',
 ]);
 
 /** Valid relation types for impact analysis filtering */
@@ -872,11 +873,77 @@ export class LocalBackend {
       return true;
     });
     
+    // Step 4.5: Blueprint-specific search (separate budget — Blueprint nodes lose to
+    // C++ in score aggregation since C++ files score from many symbols per file).
+    const blueprintHits = await this.blueprintSearch(repo, searchQuery, 10);
+    const seenBp = new Set<string>(dedupedSymbols.map(s => s.id));
+    for (const bp of blueprintHits) {
+      if (seenBp.has(bp.id)) continue;
+      seenBp.add(bp.id);
+      definitions.unshift({ // prepend so Blueprint matches appear before C++ definitions
+        id: bp.id,
+        name: bp.name,
+        type: bp.type,
+        filePath: bp.filePath,
+        startLine: bp.startLine,
+        endLine: bp.endLine,
+      });
+    }
+
     return {
       processes,
       process_symbols: dedupedSymbols,
       definitions: definitions.slice(0, 20), // cap standalone definitions
     };
+  }
+
+  /**
+   * Dedicated Blueprint FTS search — runs separately so Blueprint results don't
+   * compete with C++ files for ranking slots. C++ files accumulate score from many
+   * symbols (function + class + method all scoring for the same filePath), while a
+   * Blueprint node has only its name/description. Running separately gives Blueprints
+   * a guaranteed budget rather than losing to score aggregation.
+   */
+  private async blueprintSearch(repo: RepoHandle, query: string, limit: number): Promise<any[]> {
+    const { executeQuery } = await import('../core/lbug-adapter.js');
+    const BLUEPRINT_TABLES = [
+      ['Blueprint', 'blueprint_fts'],
+      ['AnimBlueprint', 'animblueprint_fts'],
+      ['WidgetBlueprint', 'widgetblueprint_fts'],
+      ['GameplayAbility', 'gameplayability_fts'],
+      ['GameplayEffect', 'gameplayeffect_fts'],
+      ['StateTree', 'statetree_fts'],
+      ['DataTable', 'datatable_fts'],
+      ['DataAsset', 'dataasset_fts'],
+    ] as const;
+
+    const escapedQuery = query.replace(/\\/g, '\\\\').replace(/'/g, "''");
+    const results: any[] = [];
+
+    for (const [table, index] of BLUEPRINT_TABLES) {
+      try {
+        const rows = await executeQuery(repo.id, `
+          CALL QUERY_FTS_INDEX('${table}', '${index}', '${escapedQuery}', conjunctive := false)
+          RETURN node, score ORDER BY score DESC LIMIT ${limit}
+        `);
+        for (const row of rows) {
+          const node = row.node ?? row[0] ?? {};
+          const score = row.score ?? row[1] ?? 0;
+          if (!node.id) continue;
+          results.push({
+            id: node.id,
+            name: node.name ?? '',
+            type: table,
+            filePath: node.filePath ?? '',
+            startLine: node.startLine ?? -1,
+            endLine: node.endLine ?? -1,
+            score: typeof score === 'number' ? score : parseFloat(score) || 0,
+          });
+        }
+      } catch { /* table may be empty */ }
+    }
+
+    return results.sort((a, b) => b.score - a.score).slice(0, limit);
   }
 
   /**

@@ -17,6 +17,7 @@ import { createWriteStream, WriteStream } from 'fs';
 import path from 'path';
 import { KnowledgeGraph, GraphNode, NodeLabel } from '../graph/types.js';
 import { NodeTableName } from './schema.js';
+import { UE_ASSET_LABELS } from '../../unreal/asset-types.js';
 
 /** Flush buffered rows to disk every N rows */
 const FLUSH_EVERY = 500;
@@ -242,7 +243,7 @@ export const streamAllCSVsToDisk = async (
   const multiLangHeader = 'id,name,filePath,startLine,endLine,content,description';
   const MULTI_LANG_TYPES = ['Struct', 'Enum', 'Macro', 'Typedef', 'Union', 'Namespace', 'Trait', 'Impl',
     'TypeAlias', 'Const', 'Static', 'Property', 'Record', 'Delegate', 'Annotation', 'Constructor', 'Template', 'Module',
-    'Blueprint', 'AnimBlueprint', 'WidgetBlueprint', 'GameplayAbility', 'GameplayEffect', 'StateTree', 'DataTable', 'DataAsset', 'GameplayTag'] as const;
+    ...UE_ASSET_LABELS, 'GameplayTag'] as const;
   const multiLangWriters = new Map<string, BufferedCSVWriter>();
   for (const t of MULTI_LANG_TYPES) {
     multiLangWriters.set(t, new BufferedCSVWriter(path.join(csvDir, `${t.toLowerCase()}.csv`), multiLangHeader));

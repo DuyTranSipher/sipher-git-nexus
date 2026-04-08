@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { ensureUnrealStorage, loadUnrealAssetManifest, saveUnrealAssetManifest } from './config.js';
 import { loadIgnoreRules } from '../config/ignore-service.js';
+import { UE_EXTRA_CLASS_PATHS } from './asset-types.js';
 import type {
   ExpandBlueprintChainResult,
   FindNativeBlueprintReferencesResult,
@@ -100,6 +101,8 @@ interface FilterPrefixes {
   exclude_prefixes: string[];
   include_patterns: string[];
   exclude_patterns: string[];
+  /** Extra UE asset class paths for non-Blueprint discovery (e.g., InputAction, BehaviorTree) */
+  extra_asset_class_paths?: string[];
 }
 
 /** Returns true if the value should be treated as a glob or regex pattern rather than a plain prefix. */
@@ -235,14 +238,13 @@ export async function syncUnrealAssetManifest(
     }
   }
 
-  // Build and pass filter prefixes (include + exclude)
+  // Build and pass filter prefixes (include + exclude) + extra asset class paths
   const filters = await buildFilterPrefixes(repoPath, config);
-  if (filters.include_prefixes.length > 0 || filters.exclude_prefixes.length > 0 ||
-      filters.include_patterns.length > 0 || filters.exclude_patterns.length > 0) {
-    const filterJsonPath = path.join(unrealPaths.requests_dir, `filter-${randomUUID()}.json`);
-    await fs.writeFile(filterJsonPath, JSON.stringify(filters), 'utf-8');
-    args.push(`-FilterJson=${filterJsonPath}`);
-  }
+  // Always write filter JSON — extra_asset_class_paths enables non-Blueprint asset discovery
+  const filtersWithAssetClasses: FilterPrefixes = { ...filters, extra_asset_class_paths: UE_EXTRA_CLASS_PATHS };
+  const filterJsonPath = path.join(unrealPaths.requests_dir, `filter-${randomUUID()}.json`);
+  await fs.writeFile(filterJsonPath, JSON.stringify(filtersWithAssetClasses), 'utf-8');
+  args.push(`-FilterJson=${filterJsonPath}`);
 
   try {
     const { stdout } = await runCommand(config, 'SyncAssets', args);

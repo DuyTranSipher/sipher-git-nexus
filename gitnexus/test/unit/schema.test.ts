@@ -39,8 +39,8 @@ describe('LadybugDB Schema', () => {
     });
 
     it('has expected total count', () => {
-      // 9 core + 18 multi-language + 8 UE assets + 1 GameplayTag = 36
-      expect(NODE_TABLES).toHaveLength(36);
+      // 9 core + 18 multi-language + 16 UE assets + 1 GameplayTag = 44
+      expect(NODE_TABLES).toHaveLength(44);
     });
   });
 
@@ -164,7 +164,7 @@ describe('LadybugDB Schema', () => {
 
   describe('schema query ordering', () => {
     it('NODE_SCHEMA_QUERIES has correct count', () => {
-      expect(NODE_SCHEMA_QUERIES).toHaveLength(36);
+      expect(NODE_SCHEMA_QUERIES).toHaveLength(44);
     });
 
     it('REL_SCHEMA_QUERIES has one relation table', () => {
@@ -172,8 +172,8 @@ describe('LadybugDB Schema', () => {
     });
 
     it('SCHEMA_QUERIES includes all node + rel + embedding schemas', () => {
-      // 35 node + 1 rel + 1 embedding = 37
-      expect(SCHEMA_QUERIES).toHaveLength(38);
+      // 44 node + 1 rel + 1 embedding = 46
+      expect(SCHEMA_QUERIES).toHaveLength(46);
     });
 
     it('node schemas come before relation schemas in SCHEMA_QUERIES', () => {

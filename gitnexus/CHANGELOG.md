@@ -2,7 +2,18 @@
 
 All notable changes to GitNexus will be documented in this file.
 
-## [Unreleased]
+## [1.6.0] - 2026-04-08
+
+### Added
+
+- **8 new Unreal gameplay asset types**: InputAction (IA_), InputMappingContext (IMC_), BehaviorTree (BT_), BlackboardData (BB_), AnimMontage (AM_), SmartObjectDefinition (SO_), EnvironmentQuery (EQS_), ComboGraph (CG_) — indexed as first-class graph nodes with FTS search
+- **Centralized asset type registry** (`src/unreal/asset-types.ts`): Single source of truth replaces 12 hardcoded lists across 9 files
+- **`extra_asset_class_paths` filter JSON field**: C++ commandlet discovers non-Blueprint asset types without recompilation
+
+### Changed
+
+- Refactored schema.ts, csv-generator.ts, analyze.ts, local-backend.ts, bm25-index.ts, graph-queries.ts, blueprint-ingestion.ts to consume centralized registry
+- Dynamic RELATION_SCHEMA generation for UE asset types
 
 ## [1.5.0] - 2026-04-02
 

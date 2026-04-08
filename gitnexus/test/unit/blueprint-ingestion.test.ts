@@ -125,4 +125,75 @@ describe('blueprint-ingestion', () => {
       expect(target?.label).toBe('Class');
     });
   });
+
+  describe('Tier 1 gameplay asset type labels', () => {
+    it('maps InputAction asset_class to InputAction label', async () => {
+      await writeManifest([
+        { asset_path: '/Game/Input/IA_HeavyAttack', asset_class: '/Script/EnhancedInput.InputAction' },
+      ]);
+      const result = await ingestBlueprintsIntoGraph(graph, tmpDir);
+      expect(result.nodesAdded).toBe(1);
+      const node = graph.nodes.find(n => n.properties.name === 'IA_HeavyAttack');
+      expect(node).toBeDefined();
+      expect(node!.label).toBe('InputAction');
+    });
+
+    it('maps all new Tier 1 asset classes to correct labels', async () => {
+      const assets = [
+        { asset_path: '/Game/Input/IA_Attack', asset_class: '/Script/EnhancedInput.InputAction' },
+        { asset_path: '/Game/Input/IMC_Default', asset_class: '/Script/EnhancedInput.InputMappingContext' },
+        { asset_path: '/Game/AI/BT_Patrol', asset_class: '/Script/AIModule.BehaviorTree' },
+        { asset_path: '/Game/AI/BB_Enemy', asset_class: '/Script/AIModule.BlackboardData' },
+        { asset_path: '/Game/Anim/AM_Slash', asset_class: '/Script/Engine.AnimMontage' },
+        { asset_path: '/Game/AI/SO_CoverPoint', asset_class: '/Script/SmartObjectsModule.SmartObjectDefinition' },
+        { asset_path: '/Game/AI/EQS_FindCover', asset_class: '/Script/AIModule.EnvironmentQuery' },
+        { asset_path: '/Game/Combat/CG_MeleeCombo', asset_class: '/Script/SipherComboGraph.ComboGraph' },
+      ];
+      await writeManifest(assets);
+      const result = await ingestBlueprintsIntoGraph(graph, tmpDir);
+      expect(result.nodesAdded).toBe(8);
+
+      const expectedLabels: Record<string, string> = {
+        'IA_Attack': 'InputAction',
+        'IMC_Default': 'InputMappingContext',
+        'BT_Patrol': 'BehaviorTree',
+        'BB_Enemy': 'BlackboardData',
+        'AM_Slash': 'AnimMontage',
+        'SO_CoverPoint': 'SmartObjectDefinition',
+        'EQS_FindCover': 'EnvironmentQuery',
+        'CG_MeleeCombo': 'ComboGraph',
+      };
+
+      for (const [name, expectedLabel] of Object.entries(expectedLabels)) {
+        const node = graph.nodes.find(n => n.properties.name === name);
+        expect(node, `node ${name} should exist`).toBeDefined();
+        expect(node!.label, `${name} should have label ${expectedLabel}`).toBe(expectedLabel);
+      }
+    });
+
+    it('metadata-only assets ingest without errors', async () => {
+      // Non-Blueprint assets have no generated_class, native_function_refs, or flows
+      await writeManifest([
+        { asset_path: '/Game/Input/IA_Jump', asset_class: '/Script/EnhancedInput.InputAction' },
+      ]);
+      const result = await ingestBlueprintsIntoGraph(graph, tmpDir);
+      expect(result.nodesAdded).toBe(1);
+
+      // No CALLS, OVERRIDES, or DISPATCHES edges — only the node itself
+      const edges = graph.relationships.filter(r =>
+        r.type === 'CALLS' || r.type === 'OVERRIDES' || r.type === 'DISPATCHES'
+      );
+      expect(edges.length).toBe(0);
+    });
+
+    it('unknown asset_class falls back to Blueprint label', async () => {
+      await writeManifest([
+        { asset_path: '/Game/Custom/MyThing', asset_class: '/Script/CustomModule.UnknownAssetType' },
+      ]);
+      const result = await ingestBlueprintsIntoGraph(graph, tmpDir);
+      expect(result.nodesAdded).toBe(1);
+      const node = graph.nodes.find(n => n.properties.name === 'MyThing');
+      expect(node!.label).toBe('Blueprint');
+    });
+  });
 });

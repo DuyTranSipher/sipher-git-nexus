@@ -2,6 +2,19 @@
 
 All notable changes to GitNexus will be documented in this file.
 
+## [1.6.0] - 2026-04-08
+
+### Added
+
+- **8 new Unreal gameplay asset types**: InputAction, InputMappingContext, BehaviorTree, BlackboardData, AnimMontage, SmartObjectDefinition, EnvironmentQuery, ComboGraph — all now discoverable, indexed, and queryable via `gitnexus query`, `gitnexus cypher`, and FTS search
+- **Centralized asset type registry** (`asset-types.ts`): Single source of truth for all UE asset types — adding a future type requires only 1 line instead of editing 12 locations across 9 files
+- **Filter-JSON driven C++ asset discovery**: The Unreal commandlet accepts `extra_asset_class_paths` via the filter JSON, enabling non-Blueprint asset types (UDataAsset, UObject derivatives) without C++ recompilation
+
+### Changed
+
+- **Refactored 9 TypeScript consumers** to import from the centralized registry: schema.ts, csv-generator.ts, analyze.ts, local-backend.ts, bm25-index.ts, graph-queries.ts, blueprint-ingestion.ts, bridge.ts — eliminated ~200 lines of hardcoded boilerplate
+- **Dynamic RELATION_SCHEMA generation**: UE asset type relation entries are now generated at module load time instead of hardcoded (72 lines → 5-line generator function)
+
 ## [1.5.3] - 2026-04-07
 
 ### Fixed

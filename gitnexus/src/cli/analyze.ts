@@ -19,6 +19,7 @@ import { getCurrentCommit, isGitRepo, getGitRoot } from '../storage/git.js';
 import { generateAIContextFiles } from './ai-context.js';
 import { generateSkillFiles, type GeneratedSkillInfo } from './skill-gen.js';
 import fs from 'fs/promises';
+import { UE_FTS_TABLES } from '../unreal/asset-types.js';
 
 
 const HEAP_MB = 8192;
@@ -283,21 +284,11 @@ export const analyzeCommand = async (
     await createFTSIndex('Class', 'class_fts', ['name', 'content']);
     await createFTSIndex('Method', 'method_fts', ['name', 'content']);
     await createFTSIndex('Interface', 'interface_fts', ['name', 'content']);
-    // Blueprint types index 'description' which holds tokenized names for FTS.
+    // Blueprint/UE asset types index 'description' which holds tokenized names for FTS.
     // e.g. "GA_ArtifactCombo_GenericAbility" → "GA Artifact Combo Generic Ability ..."
     // This enables matching underscore/camelCase asset names via porter stemmer.
     // Always drop before recreating — COPY replaces table data but leaves stale index structures.
-    const bpIndexes: [string, string][] = [
-      ['Blueprint', 'blueprint_fts'],
-      ['AnimBlueprint', 'animblueprint_fts'],
-      ['WidgetBlueprint', 'widgetblueprint_fts'],
-      ['GameplayAbility', 'gameplayability_fts'],
-      ['GameplayEffect', 'gameplayeffect_fts'],
-      ['StateTree', 'statetree_fts'],
-      ['DataTable', 'datatable_fts'],
-      ['DataAsset', 'dataasset_fts'],
-    ];
-    for (const [table, index] of bpIndexes) {
+    for (const [table, index] of UE_FTS_TABLES) {
       await dropFTSIndex(table, index);
       await createFTSIndex(table, index, ['name', 'description', 'content']);
     }

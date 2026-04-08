@@ -6,6 +6,7 @@
  */
 
 import { initLbug, executeQuery, closeLbug } from '../../mcp/core/lbug-adapter.js';
+import { UE_ASSET_LABELS } from '../../unreal/asset-types.js';
 
 const REPO_ID = '__wiki__';
 
@@ -321,11 +322,8 @@ export async function getInterModuleEdgesForOverview(
 
 // ─── Blueprint / Unreal Queries ──────────────────────────────────────
 
-// Blueprint-family labels used for querying UE asset nodes
-const BLUEPRINT_LABELS = [
-  'Blueprint', 'AnimBlueprint', 'WidgetBlueprint',
-  'GameplayAbility', 'GameplayEffect', 'StateTree', 'DataTable', 'DataAsset',
-] as const;
+// Blueprint-family labels used for querying UE asset nodes (from centralized registry)
+const BLUEPRINT_LABELS = UE_ASSET_LABELS;
 
 /**
  * Get all Blueprint asset nodes from the graph.

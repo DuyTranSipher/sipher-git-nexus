@@ -12,6 +12,7 @@ import { KnowledgeGraph, GraphNode, NodeLabel } from '../core/graph/types.js';
 import { generateId } from '../lib/utils.js';
 import { shouldIgnorePath, loadIgnoreRules } from '../config/ignore-service.js';
 import type { UnrealAssetManifest } from './types.js';
+import { UE_LABEL_MAP } from './asset-types.js';
 
 export interface BlueprintIngestionResult {
   nodesAdded: number;
@@ -67,28 +68,14 @@ const extractClassName = (unrealPath: string): string => {
 };
 
 /** Map an Unreal asset class path to a typed NodeLabel.
- *  Falls back to 'Blueprint' for unknown/missing asset classes. */
+ *  Falls back to 'Blueprint' for unknown/missing asset classes.
+ *  Lookup table sourced from the centralized registry (asset-types.ts). */
 const assetClassToLabel = (assetClass?: string): NodeLabel => {
   if (!assetClass) return 'Blueprint';
   // Extract class name from path: "/Script/Engine.AnimBlueprint" → "AnimBlueprint"
   const dot = assetClass.lastIndexOf('.');
   const className = dot >= 0 ? assetClass.slice(dot + 1) : assetClass;
-
-  const LABEL_MAP: Record<string, NodeLabel> = {
-    'AnimBlueprint': 'AnimBlueprint',
-    'WidgetBlueprint': 'WidgetBlueprint',
-    'GameplayAbilityBlueprint': 'GameplayAbility',
-    'GameplayAbility': 'GameplayAbility',
-    'GameplayEffectBlueprint': 'GameplayEffect',
-    'GameplayEffect': 'GameplayEffect',
-    'StateTree': 'StateTree',
-    'DataTable': 'DataTable',
-    'DataAsset': 'DataAsset',
-    // Common subclasses that should map to the parent type
-    'PrimaryDataAsset': 'DataAsset',
-  };
-
-  return LABEL_MAP[className] || 'Blueprint';
+  return (UE_LABEL_MAP[className] as NodeLabel) || 'Blueprint';
 };
 
 /**

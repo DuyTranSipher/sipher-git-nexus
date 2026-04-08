@@ -50,6 +50,8 @@ private:
 		TArray<FString> IncludePatterns;
 		/** Glob or regex: patterns for exclude (blacklist). Evaluated after prefix check. */
 		TArray<FString> ExcludePatterns;
+		/** Extra asset class paths for non-Blueprint discovery (e.g., "/Script/EnhancedInput.InputAction") */
+		TArray<FString> ExtraAssetClassPaths;
 	};
 
 	bool WriteJsonToFile(const FString& OutputJsonPath, const TSharedPtr<FJsonObject>& RootObject) const;

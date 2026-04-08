@@ -1,28 +1,27 @@
 /**
  * LadybugDB Schema Definitions
- * 
+ *
  * Hybrid Schema:
  * - Separate node tables for each code element type (File, Function, Class, etc.)
  * - Single CodeRelation table with 'type' property for all relationships
- * 
+ *
  * This allows LLMs to write natural Cypher queries like:
  *   MATCH (f:Function)-[r:CodeRelation {type: 'CALLS'}]->(g:Function) RETURN f, g
  */
 
+import { UE_ASSET_LABELS } from '../../unreal/asset-types.js';
+
 // ============================================================================
 // NODE TABLE NAMES
 // ============================================================================
-export const NODE_TABLES = [
+const BASE_NODE_TABLES = [
   'File', 'Folder', 'Function', 'Class', 'Interface', 'Method', 'CodeElement', 'Community', 'Process',
   // Multi-language support
   'Struct', 'Enum', 'Macro', 'Typedef', 'Union', 'Namespace', 'Trait', 'Impl',
   'TypeAlias', 'Const', 'Static', 'Property', 'Record', 'Delegate', 'Annotation', 'Constructor', 'Template', 'Module',
-  // Unreal Engine Blueprint assets
-  'Blueprint', 'AnimBlueprint', 'WidgetBlueprint', 'GameplayAbility', 'GameplayEffect',
-  'StateTree', 'DataTable', 'DataAsset',
-  'GameplayTag',
 ] as const;
-export type NodeTableName = typeof NODE_TABLES[number];
+export const NODE_TABLES = [...BASE_NODE_TABLES, ...UE_ASSET_LABELS, 'GameplayTag'] as const;
+export type NodeTableName = typeof BASE_NODE_TABLES[number] | string;
 
 // ============================================================================
 // RELATION TABLE
@@ -197,21 +196,25 @@ export const CONSTRUCTOR_SCHEMA = CODE_ELEMENT_BASE('Constructor');
 export const TEMPLATE_SCHEMA = CODE_ELEMENT_BASE('Template');
 export const MODULE_SCHEMA = CODE_ELEMENT_BASE('Module');
 
-// Unreal Engine Blueprint assets
-export const BLUEPRINT_SCHEMA = CODE_ELEMENT_BASE('Blueprint');
-export const ANIM_BLUEPRINT_SCHEMA = CODE_ELEMENT_BASE('AnimBlueprint');
-export const WIDGET_BLUEPRINT_SCHEMA = CODE_ELEMENT_BASE('WidgetBlueprint');
-export const GAMEPLAY_ABILITY_SCHEMA = CODE_ELEMENT_BASE('GameplayAbility');
-export const GAMEPLAY_EFFECT_SCHEMA = CODE_ELEMENT_BASE('GameplayEffect');
-export const STATE_TREE_SCHEMA = CODE_ELEMENT_BASE('StateTree');
-export const DATA_TABLE_SCHEMA = CODE_ELEMENT_BASE('DataTable');
-export const DATA_ASSET_SCHEMA = CODE_ELEMENT_BASE('DataAsset');
+// Unreal Engine asset types — generated from centralized registry
+const UE_ASSET_SCHEMAS = UE_ASSET_LABELS.map(label => CODE_ELEMENT_BASE(label));
 export const GAMEPLAY_TAG_SCHEMA = CODE_ELEMENT_BASE('GameplayTag');
 
 // ============================================================================
 // RELATION TABLE SCHEMA
 // Single table with 'type' property - connects all node tables
 // ============================================================================
+
+/** Generate FROM/TO relation entries for all UE asset types.
+ *  Each type can connect to: Class, Struct, Method, Function, Blueprint, self, GameplayTag, Community, Process. */
+function generateUERelEntries(): string {
+  return UE_ASSET_LABELS.map(label => {
+    const targets = ['Class', 'Struct', 'Method', 'Function', 'Blueprint', label, 'GameplayTag', 'Community', 'Process'];
+    // Deduplicate (Blueprint → Blueprint only listed once)
+    const unique = [...new Set(targets)];
+    return unique.map(target => `  FROM \`${label}\` TO \`${target}\``).join(',\n');
+  }).join(',\n');
+}
 
 export const RELATION_SCHEMA = `
 CREATE REL TABLE ${REL_TABLE_NAME} (
@@ -402,77 +405,7 @@ CREATE REL TABLE ${REL_TABLE_NAME} (
   FROM \`Annotation\` TO Process,
   FROM \`Template\` TO Process,
   FROM CodeElement TO Process,
-  FROM \`Blueprint\` TO Class,
-  FROM \`Blueprint\` TO \`Struct\`,
-  FROM \`Blueprint\` TO Method,
-  FROM \`Blueprint\` TO Function,
-  FROM \`Blueprint\` TO \`Blueprint\`,
-  FROM \`Blueprint\` TO \`GameplayTag\`,
-  FROM \`Blueprint\` TO Community,
-  FROM \`Blueprint\` TO Process,
-  FROM \`AnimBlueprint\` TO Class,
-  FROM \`AnimBlueprint\` TO \`Struct\`,
-  FROM \`AnimBlueprint\` TO Method,
-  FROM \`AnimBlueprint\` TO Function,
-  FROM \`AnimBlueprint\` TO \`Blueprint\`,
-  FROM \`AnimBlueprint\` TO \`AnimBlueprint\`,
-  FROM \`AnimBlueprint\` TO \`GameplayTag\`,
-  FROM \`AnimBlueprint\` TO Community,
-  FROM \`AnimBlueprint\` TO Process,
-  FROM \`WidgetBlueprint\` TO Class,
-  FROM \`WidgetBlueprint\` TO \`Struct\`,
-  FROM \`WidgetBlueprint\` TO Method,
-  FROM \`WidgetBlueprint\` TO Function,
-  FROM \`WidgetBlueprint\` TO \`Blueprint\`,
-  FROM \`WidgetBlueprint\` TO \`WidgetBlueprint\`,
-  FROM \`WidgetBlueprint\` TO \`GameplayTag\`,
-  FROM \`WidgetBlueprint\` TO Community,
-  FROM \`WidgetBlueprint\` TO Process,
-  FROM \`GameplayAbility\` TO Class,
-  FROM \`GameplayAbility\` TO \`Struct\`,
-  FROM \`GameplayAbility\` TO Method,
-  FROM \`GameplayAbility\` TO Function,
-  FROM \`GameplayAbility\` TO \`Blueprint\`,
-  FROM \`GameplayAbility\` TO \`GameplayAbility\`,
-  FROM \`GameplayAbility\` TO \`GameplayTag\`,
-  FROM \`GameplayAbility\` TO Community,
-  FROM \`GameplayAbility\` TO Process,
-  FROM \`GameplayEffect\` TO Class,
-  FROM \`GameplayEffect\` TO \`Struct\`,
-  FROM \`GameplayEffect\` TO Method,
-  FROM \`GameplayEffect\` TO Function,
-  FROM \`GameplayEffect\` TO \`Blueprint\`,
-  FROM \`GameplayEffect\` TO \`GameplayEffect\`,
-  FROM \`GameplayEffect\` TO \`GameplayTag\`,
-  FROM \`GameplayEffect\` TO Community,
-  FROM \`GameplayEffect\` TO Process,
-  FROM \`StateTree\` TO Class,
-  FROM \`StateTree\` TO \`Struct\`,
-  FROM \`StateTree\` TO Method,
-  FROM \`StateTree\` TO Function,
-  FROM \`StateTree\` TO \`Blueprint\`,
-  FROM \`StateTree\` TO \`StateTree\`,
-  FROM \`StateTree\` TO \`GameplayTag\`,
-  FROM \`StateTree\` TO Community,
-  FROM \`StateTree\` TO Process,
-  FROM \`DataTable\` TO Class,
-  FROM \`DataTable\` TO \`Struct\`,
-  FROM \`DataTable\` TO Method,
-  FROM \`DataTable\` TO Function,
-  FROM \`DataTable\` TO \`Blueprint\`,
-  FROM \`DataTable\` TO \`DataTable\`,
-  FROM \`DataTable\` TO \`GameplayTag\`,
-  FROM \`DataTable\` TO Community,
-  FROM \`DataTable\` TO Process,
-  FROM \`DataAsset\` TO Class,
-  FROM \`DataAsset\` TO \`Struct\`,
-  FROM \`DataAsset\` TO Method,
-  FROM \`DataAsset\` TO Function,
-  FROM \`DataAsset\` TO \`Blueprint\`,
-  FROM \`DataAsset\` TO \`DataAsset\`,
-  FROM \`DataAsset\` TO Community,
-  FROM \`DataAsset\` TO \`GameplayTag\`,
-  FROM \`DataAsset\` TO Process,
+${generateUERelEntries()},
   FROM \`GameplayTag\` TO \`GameplayTag\`,
   FROM \`GameplayTag\` TO Community,
   FROM \`GameplayTag\` TO Process,
@@ -536,14 +469,7 @@ export const NODE_SCHEMA_QUERIES = [
   CONSTRUCTOR_SCHEMA,
   TEMPLATE_SCHEMA,
   MODULE_SCHEMA,
-  BLUEPRINT_SCHEMA,
-  ANIM_BLUEPRINT_SCHEMA,
-  WIDGET_BLUEPRINT_SCHEMA,
-  GAMEPLAY_ABILITY_SCHEMA,
-  GAMEPLAY_EFFECT_SCHEMA,
-  STATE_TREE_SCHEMA,
-  DATA_TABLE_SCHEMA,
-  DATA_ASSET_SCHEMA,
+  ...UE_ASSET_SCHEMAS,
   GAMEPLAY_TAG_SCHEMA,
 ];
 

@@ -34,6 +34,7 @@ import type {
   UnrealAssetManifest,
   UnrealBlueprintCandidate,
 } from '../../unreal/types.js';
+import { UE_ASSET_LABELS, UE_FTS_TABLES } from '../../unreal/asset-types.js';
 // AI context generation is CLI-only (gitnexus analyze)
 // import { generateAIContextFiles } from '../../cli/ai-context.js';
 
@@ -60,8 +61,7 @@ export const VALID_NODE_LABELS = new Set([
   'Community', 'Process', 'Struct', 'Enum', 'Macro', 'Typedef', 'Union',
   'Namespace', 'Trait', 'Impl', 'TypeAlias', 'Const', 'Static', 'Property',
   'Record', 'Delegate', 'Annotation', 'Constructor', 'Template', 'Module',
-  'Blueprint', 'AnimBlueprint', 'WidgetBlueprint', 'GameplayAbility', 'GameplayEffect',
-  'StateTree', 'DataTable', 'DataAsset', 'GameplayTag',
+  ...UE_ASSET_LABELS, 'GameplayTag',
 ]);
 
 /** Valid relation types for impact analysis filtering */
@@ -906,21 +906,11 @@ export class LocalBackend {
    */
   private async blueprintSearch(repo: RepoHandle, query: string, limit: number): Promise<any[]> {
     const { executeQuery } = await import('../core/lbug-adapter.js');
-    const BLUEPRINT_TABLES = [
-      ['Blueprint', 'blueprint_fts'],
-      ['AnimBlueprint', 'animblueprint_fts'],
-      ['WidgetBlueprint', 'widgetblueprint_fts'],
-      ['GameplayAbility', 'gameplayability_fts'],
-      ['GameplayEffect', 'gameplayeffect_fts'],
-      ['StateTree', 'statetree_fts'],
-      ['DataTable', 'datatable_fts'],
-      ['DataAsset', 'dataasset_fts'],
-    ] as const;
 
     const escapedQuery = query.replace(/\\/g, '\\\\').replace(/'/g, "''");
     const results: any[] = [];
 
-    for (const [table, index] of BLUEPRINT_TABLES) {
+    for (const [table, index] of UE_FTS_TABLES) {
       try {
         const rows = await executeQuery(repo.id, `
           CALL QUERY_FTS_INDEX('${table}', '${index}', '${escapedQuery}', conjunctive := false)

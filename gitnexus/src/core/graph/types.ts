@@ -42,7 +42,16 @@ export type NodeLabel =
   | 'StateTree'
   | 'DataTable'
   | 'DataAsset'
-  | 'GameplayTag';
+  | 'GameplayTag'
+  // Unreal Engine gameplay asset types (non-Blueprint)
+  | 'InputAction'
+  | 'InputMappingContext'
+  | 'BehaviorTree'
+  | 'BlackboardData'
+  | 'AnimMontage'
+  | 'SmartObjectDefinition'
+  | 'EnvironmentQuery'
+  | 'ComboGraph';
 
 
 import { SupportedLanguages } from '../../config/supported-languages.js';

@@ -175,6 +175,7 @@ export interface SyncUnrealAssetManifestResult {
 }
 
 export interface FindNativeBlueprintReferencesResult {
+  status?: 'success' | 'error';
   target_function: NativeFunctionTarget;
   candidates_scanned: number;
   candidate_assets: UnrealBlueprintCandidate[];
@@ -182,15 +183,18 @@ export interface FindNativeBlueprintReferencesResult {
   manifest_path?: string;
   manifest_refreshed?: boolean;
   warnings?: string[];
+  error?: string;
 }
 
 export interface ExpandBlueprintChainResult {
+  status?: 'success' | 'error';
   asset_path: string;
   chain_anchor_id: string;
   direction: 'upstream' | 'downstream';
   max_depth: number;
   nodes: UnrealChainNode[];
   warnings?: string[];
+  error?: string;
 }
 
 export interface DerivedBlueprintResult {

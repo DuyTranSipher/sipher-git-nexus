@@ -344,20 +344,60 @@ export async function findNativeBlueprintReferences(
     `-CandidatesJson=${requestPath}`,
   ];
 
-  const { stdout } = await runCommand(config, 'FindNativeBlueprintReferences', args);
-  const response = await readOutputJson<UnrealAnalyzerFindRefsResponse>(outputPath, stdout);
+  try {
+    const { stdout } = await runCommand(config, 'FindNativeBlueprintReferences', args);
+    const response = await readOutputJson<UnrealAnalyzerFindRefsResponse>(outputPath, stdout);
 
-  return {
-    target_function: {
-      ...target,
-      ...(response.target_function || {}),
-    },
-    candidates_scanned: response.candidates_scanned ?? candidateAssets.length,
-    candidate_assets: candidateAssets,
-    confirmed_references: response.confirmed_references || [],
-    manifest_path: manifestPath,
-    warnings: response.warnings || [],
-  };
+    return {
+      target_function: {
+        ...target,
+        ...(response.target_function || {}),
+      },
+      candidates_scanned: response.candidates_scanned ?? candidateAssets.length,
+      candidate_assets: candidateAssets,
+      confirmed_references: response.confirmed_references || [],
+      manifest_path: manifestPath,
+      warnings: response.warnings || [],
+    };
+  } catch (error: any) {
+    // UE may exit non-zero due to Blueprint compilation warnings even though
+    // the commandlet completed and wrote valid output. Try reading the file first.
+    try {
+      const stdout = error?.stdout ? String(error.stdout).trim() : '';
+      const response = await readOutputJson<UnrealAnalyzerFindRefsResponse>(outputPath, stdout);
+      if (response && Array.isArray(response.confirmed_references)) {
+        return {
+          target_function: {
+            ...target,
+            ...(response.target_function || {}),
+          },
+          candidates_scanned: response.candidates_scanned ?? candidateAssets.length,
+          candidate_assets: candidateAssets,
+          confirmed_references: response.confirmed_references,
+          manifest_path: manifestPath,
+          warnings: [...(response.warnings || []), 'UE exited with non-zero code (likely Blueprint compilation warnings)'],
+        };
+      }
+    } catch { /* output file not readable, fall through to error */ }
+
+    const stderr = error?.stderr ? String(error.stderr).trim() : '';
+    const stdout = error?.stdout ? String(error.stdout).trim() : '';
+    const msg = error instanceof Error ? error.message : String(error);
+    const ueLog = await readUELogErrors(config);
+    const details = [msg, stderr && `stderr: ${stderr}`, stdout && `stdout: ${stdout}`, ueLog]
+      .filter(Boolean)
+      .join('\n');
+    return {
+      status: 'error',
+      error: details,
+      target_function: target,
+      candidates_scanned: candidateAssets.length,
+      candidate_assets: candidateAssets,
+      confirmed_references: [],
+      manifest_path: manifestPath,
+      warnings: [],
+    };
+  }
 }
 
 export async function expandBlueprintChain(
@@ -378,15 +418,52 @@ export async function expandBlueprintChain(
     `-MaxDepth=${maxDepth}`,
   ];
 
-  const { stdout } = await runCommand(config, 'ExpandBlueprintChain', args);
-  const response = await readOutputJson<UnrealAnalyzerExpandChainResponse>(outputPath, stdout);
+  try {
+    const { stdout } = await runCommand(config, 'ExpandBlueprintChain', args);
+    const response = await readOutputJson<UnrealAnalyzerExpandChainResponse>(outputPath, stdout);
 
-  return {
-    asset_path: assetPath,
-    chain_anchor_id: chainAnchorId,
-    direction,
-    max_depth: maxDepth,
-    nodes: response.nodes || [],
-    warnings: response.warnings || [],
-  };
+    return {
+      asset_path: assetPath,
+      chain_anchor_id: chainAnchorId,
+      direction,
+      max_depth: maxDepth,
+      nodes: response.nodes || [],
+      warnings: response.warnings || [],
+    };
+  } catch (error: any) {
+    // UE may exit non-zero due to Blueprint compilation warnings even though
+    // the commandlet completed and wrote valid output. Try reading the file first.
+    try {
+      const stdout = error?.stdout ? String(error.stdout).trim() : '';
+      const response = await readOutputJson<UnrealAnalyzerExpandChainResponse>(outputPath, stdout);
+      if (response && Array.isArray(response.nodes)) {
+        return {
+          asset_path: assetPath,
+          chain_anchor_id: chainAnchorId,
+          direction,
+          max_depth: maxDepth,
+          nodes: response.nodes,
+          warnings: [...(response.warnings || []), 'UE exited with non-zero code (likely Blueprint compilation warnings)'],
+        };
+      }
+    } catch { /* output file not readable, fall through to error */ }
+
+    const stderr = error?.stderr ? String(error.stderr).trim() : '';
+    const stdout = error?.stdout ? String(error.stdout).trim() : '';
+    const msg = error instanceof Error ? error.message : String(error);
+    const ueLog = await readUELogErrors(config);
+    const details = [msg, stderr && `stderr: ${stderr}`, stdout && `stdout: ${stdout}`, ueLog]
+      .filter(Boolean)
+      .join('\n');
+    return {
+      status: 'error',
+      error: details,
+      asset_path: assetPath,
+      chain_anchor_id: chainAnchorId,
+      direction,
+      max_depth: maxDepth,
+      nodes: [],
+      warnings: [],
+    };
+  }
 }

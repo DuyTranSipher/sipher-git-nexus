@@ -964,6 +964,24 @@ UGitNexusBlueprintAnalyzerCommandlet::LoadFilterPrefixes(const FString& FilterJs
 		UE_LOG(LogTemp, Display, TEXT("GitNexusBlueprintAnalyzer: Loaded %d exclude patterns"), Result.ExcludePatterns.Num());
 	}
 
+	// Read extra_asset_class_paths (non-Blueprint asset types like InputAction, BehaviorTree)
+	const TArray<TSharedPtr<FJsonValue>>* ExtraClassValues = nullptr;
+	if (RootObject->TryGetArrayField(TEXT("extra_asset_class_paths"), ExtraClassValues) && ExtraClassValues)
+	{
+		for (const TSharedPtr<FJsonValue>& Value : *ExtraClassValues)
+		{
+			FString ClassPath;
+			if (Value.IsValid() && Value->TryGetString(ClassPath))
+			{
+				Result.ExtraAssetClassPaths.Add(ClassPath);
+			}
+		}
+	}
+	if (Result.ExtraAssetClassPaths.Num() > 0)
+	{
+		UE_LOG(LogTemp, Display, TEXT("GitNexusBlueprintAnalyzer: Loaded %d extra asset class paths"), Result.ExtraAssetClassPaths.Num());
+	}
+
 	return Result;
 }
 
@@ -1033,6 +1051,18 @@ TArray<FAssetData> UGitNexusBlueprintAnalyzerCommandlet::GetAllBlueprintAssets(c
 	Filter.ClassPaths.Add(UBlueprint::StaticClass()->GetClassPathName());
 	// Also include StateTree assets (UStateTree derives from UDataAsset, not UBlueprint)
 	Filter.ClassPaths.Add(FTopLevelAssetPath(FName("/Script/StateTreeModule"), FName("StateTree")));
+	// Add extra asset class paths from filter JSON (non-Blueprint assets like InputAction, BehaviorTree, etc.)
+	// Safe: GetAssets returns empty results for class paths whose module isn't loaded.
+	for (const FString& ClassPath : Filters.ExtraAssetClassPaths)
+	{
+		int32 DotIdx;
+		if (ClassPath.FindLastChar('.', DotIdx))
+		{
+			FString PackagePart = ClassPath.Left(DotIdx);
+			FString ClassName = ClassPath.Mid(DotIdx + 1);
+			Filter.ClassPaths.Add(FTopLevelAssetPath(FName(*PackagePart), FName(*ClassName)));
+		}
+	}
 	Filter.bRecursiveClasses = true;
 
 	TArray<FAssetData> AllAssets;

@@ -42,6 +42,10 @@ export interface UnrealConfig {
   timeout_ms?: number;
   working_directory?: string;
   extra_args?: string[];
+  /** gitnexus CLI version that installed/last updated the plugin. */
+  installed_version?: string;
+  /** Absolute path to the plugin source the junction points to. */
+  plugin_source?: string;
   /**
    * Paths to exclude from sync. Accepts:
    *   - Unreal package path prefixes: "/Game/ThirdParty", "/SomePlugin"

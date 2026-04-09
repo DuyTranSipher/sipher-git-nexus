@@ -13,6 +13,33 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// ─── Helpers ──────────────────────────────────────────────────────
+
+function getCliVersion(): string {
+  const pkgPath = path.join(__dirname, '..', '..', 'package.json');
+  return JSON.parse(fsSync.readFileSync(pkgPath, 'utf-8')).version;
+}
+
+/**
+ * Resolve the plugin source directory.
+ * Prefers vendor/ (npm installs), falls back to monorepo source checkout.
+ */
+function resolvePluginSource(): string {
+  const vendorPlugin = path.resolve(path.join(__dirname, '..', '..', 'vendor', 'GitNexusUnreal'));
+  if (fsSync.existsSync(vendorPlugin) && fsSync.statSync(vendorPlugin).isDirectory()) {
+    return vendorPlugin;
+  }
+  const monorepoPlugin = path.resolve(path.join(__dirname, '..', '..', '..', 'gitnexus-unreal', 'GitNexusUnreal'));
+  if (fsSync.existsSync(monorepoPlugin) && fsSync.statSync(monorepoPlugin).isDirectory()) {
+    return monorepoPlugin;
+  }
+  throw new Error(
+    'GitNexusUnreal plugin source not found. '
+    + 'If running from source, ensure gitnexus-unreal/ exists. '
+    + 'If installed via npm, reinstall the package.'
+  );
+}
+
 // ─── Project detection ─────────────────────────────────────────────
 
 export async function findUProjectFile(projectRoot: string): Promise<string> {
@@ -124,7 +151,7 @@ export interface UnrealPluginInstallResult {
 }
 
 /**
- * Copy the bundled plugin into the UE project and write both config layers.
+ * Create a junction from Plugins/GitNexusUnreal to the plugin source and write both config layers.
  * Throws on any error so callers can handle/display it.
  */
 export async function installUnrealPlugin(options: {
@@ -153,19 +180,14 @@ export async function installUnrealPlugin(options: {
     );
   }
 
-  // Locate bundled plugin (vendor/ relative to package root)
-  const bundledPlugin = path.join(__dirname, '..', '..', 'vendor', 'GitNexusUnreal');
-  const bundleExists = await fs.stat(bundledPlugin).then(s => s.isDirectory()).catch(() => false);
-  if (!bundleExists) {
-    throw new Error('Bundled plugin not found at vendor/GitNexusUnreal. Reinstall the gitnexus package.');
-  }
+  // Resolve plugin source and create junction (no copy)
+  const pluginSource = resolvePluginSource();
 
-  // Copy plugin
   if (pluginExists) {
     await fs.rm(pluginDest, { recursive: true, force: true });
   }
   await fs.mkdir(path.join(projectRoot, 'Plugins'), { recursive: true });
-  await copyDirRecursive(bundledPlugin, pluginDest);
+  await fs.symlink(pluginSource, pluginDest, 'junction');
 
   // Write shared config (.gitnexus-unreal.json — committable, no machine-specific values)
   let existingShared: Record<string, unknown> = {};
@@ -173,10 +195,13 @@ export async function installUnrealPlugin(options: {
   try { existingShared = JSON.parse(await fs.readFile(sharedConfigPath, 'utf-8')); } catch { /* fresh */ }
   try { existingLocal = JSON.parse(await fs.readFile(localConfigPath, 'utf-8')); } catch { /* fresh */ }
 
+  const cliVersion = getCliVersion();
   const sharedConfig = {
     commandlet: 'GitNexusBlueprintAnalyzer',
     timeout_ms: 300000,
     ...existingShared,
+    installed_version: cliVersion,
+    plugin_source: pluginSource,
   };
   await fs.writeFile(sharedConfigPath, JSON.stringify(sharedConfig, null, 2) + '\n', 'utf-8');
 
@@ -190,6 +215,122 @@ export async function installUnrealPlugin(options: {
   await fs.writeFile(localConfigPath, JSON.stringify(localConfig, null, 2) + '\n', 'utf-8');
 
   return { pluginDest, sharedConfigPath, localConfigPath, editorCmd, projectPath: uprojectPath, projectName };
+}
+
+// ─── Update ───────────────────────────────────────────────────────
+
+export interface UnrealPluginUpdateResult {
+  previousVersion: string | undefined;
+  newVersion: string;
+  pluginSource: string;
+  junctionRecreated: boolean;
+}
+
+/**
+ * Update the plugin junction and version stamp. Preserves existing config.
+ * After calling this, the editor target must be rebuilt.
+ */
+export async function updateUnrealPlugin(options: {
+  projectRoot: string;
+}): Promise<UnrealPluginUpdateResult> {
+  const { projectRoot } = options;
+  const pluginDest = path.join(projectRoot, 'Plugins', 'GitNexusUnreal');
+  const sharedConfigPath = path.join(projectRoot, '.gitnexus-unreal.json');
+
+  // Read existing shared config
+  let existingShared: Record<string, unknown> = {};
+  try { existingShared = JSON.parse(await fs.readFile(sharedConfigPath, 'utf-8')); } catch { /* fresh */ }
+  const previousVersion = existingShared.installed_version as string | undefined;
+
+  // Resolve current plugin source
+  const pluginSource = resolvePluginSource();
+  const cliVersion = getCliVersion();
+
+  // Check if junction needs to be recreated
+  let junctionRecreated = false;
+  const destExists = await fs.stat(pluginDest).catch(() => null);
+  if (destExists) {
+    // Check if it's a junction pointing to the right place
+    try {
+      const currentTarget = await fs.readlink(pluginDest);
+      if (path.resolve(currentTarget) !== pluginSource) {
+        await fs.rm(pluginDest, { recursive: true, force: true });
+        await fs.symlink(pluginSource, pluginDest, 'junction');
+        junctionRecreated = true;
+      }
+    } catch {
+      // Not a junction (old-style copy) — replace with junction
+      await fs.rm(pluginDest, { recursive: true, force: true });
+      await fs.symlink(pluginSource, pluginDest, 'junction');
+      junctionRecreated = true;
+    }
+  } else {
+    await fs.mkdir(path.join(projectRoot, 'Plugins'), { recursive: true });
+    await fs.symlink(pluginSource, pluginDest, 'junction');
+    junctionRecreated = true;
+  }
+
+  // Update version stamp in shared config (preserve all other fields)
+  existingShared.installed_version = cliVersion;
+  existingShared.plugin_source = pluginSource;
+  await fs.writeFile(sharedConfigPath, JSON.stringify(existingShared, null, 2) + '\n', 'utf-8');
+
+  return { previousVersion, newVersion: cliVersion, pluginSource, junctionRecreated };
+}
+
+// ─── Remove ───────────────────────────────────────────────────────
+
+export interface UnrealPluginRemoveResult {
+  removed: string[];
+}
+
+/**
+ * Remove the plugin junction, configs, and manifests from a target UE project.
+ * Only removes the junction link — the source files are untouched.
+ */
+export async function removeUnrealPlugin(options: {
+  projectRoot: string;
+  keepConfig?: boolean;
+}): Promise<UnrealPluginRemoveResult> {
+  const { projectRoot, keepConfig } = options;
+  const removed: string[] = [];
+
+  // 1. Remove plugin (junction or directory)
+  const pluginDest = path.join(projectRoot, 'Plugins', 'GitNexusUnreal');
+  const pluginStat = await fs.lstat(pluginDest).catch(() => null);
+  if (pluginStat) {
+    // fs.rm handles both junctions and real directories
+    await fs.rm(pluginDest, { recursive: true, force: true });
+    removed.push(pluginDest);
+  }
+
+  // 2. Remove .gitnexus/unreal/ (local config, manifest, temp files)
+  const unrealStorageDir = path.join(projectRoot, '.gitnexus', 'unreal');
+  if (await fs.stat(unrealStorageDir).catch(() => null)) {
+    await fs.rm(unrealStorageDir, { recursive: true, force: true });
+    removed.push(unrealStorageDir);
+  }
+
+  // 3. Remove shared config (unless --keep-config)
+  if (!keepConfig) {
+    const sharedConfigPath = path.join(projectRoot, '.gitnexus-unreal.json');
+    if (await fs.stat(sharedConfigPath).catch(() => null)) {
+      await fs.rm(sharedConfigPath);
+      removed.push(sharedConfigPath);
+    }
+  }
+
+  // 4. Clean up empty .gitnexus/ directory
+  const gitnexusDir = path.join(projectRoot, '.gitnexus');
+  try {
+    const entries = await fs.readdir(gitnexusDir);
+    if (entries.length === 0) {
+      await fs.rmdir(gitnexusDir);
+      removed.push(gitnexusDir);
+    }
+  } catch { /* not present or not empty */ }
+
+  return { removed };
 }
 
 // ─── UBT build ────────────────────────────────────────────────────

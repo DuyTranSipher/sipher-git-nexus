@@ -153,6 +153,21 @@ unrealCmd
   .option('-r, --repo <name>', 'Target repository')
   .action(createLazyAction(() => import('./unreal.js'), 'unrealStatusCommand'));
 
+unrealCmd
+  .command('update')
+  .description('Update the commandlet plugin to the current CLI version and rebuild')
+  .option('--project <path>', 'UE project root (default: current directory)')
+  .option('--no-build', 'Skip the editor rebuild step')
+  .action(createLazyAction(() => import('./unreal.js'), 'unrealUpdateCommand'));
+
+unrealCmd
+  .command('remove')
+  .description('Remove the GitNexusUnreal plugin and config from the UE project')
+  .option('--project <path>', 'UE project root (default: current directory)')
+  .option('-y, --yes', 'Skip confirmation prompt')
+  .option('--keep-config', 'Keep .gitnexus-unreal.json (preserves include/exclude paths)')
+  .action(createLazyAction(() => import('./unreal.js'), 'unrealRemoveCommand'));
+
 program
   .command('unreal-sync')
   .description('Refresh the Unreal Blueprint asset manifest for the current indexed repo')

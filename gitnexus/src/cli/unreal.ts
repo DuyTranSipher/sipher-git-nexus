@@ -6,8 +6,10 @@
  */
 
 import fs from 'fs/promises';
+import fsSync from 'fs';
 import path from 'path';
 import { createInterface } from 'readline/promises';
+import { fileURLToPath } from 'url';
 import { getStoragePaths } from '../storage/repo-manager.js';
 import { getGitRoot } from '../storage/git.js';
 import type { UnrealConfig } from '../unreal/types.js';
@@ -15,8 +17,30 @@ import {
   findUProjectFile,
   resolveEditorCmd,
   installUnrealPlugin,
+  updateUnrealPlugin,
+  removeUnrealPlugin,
   buildUnrealPlugin,
 } from '../unreal/plugin-setup.js';
+
+// ─── Helpers ──────────────────────────────────────────────────────────
+
+const __cliDirname = path.dirname(fileURLToPath(import.meta.url));
+
+function getCliVersion(): string {
+  const pkgPath = path.join(__cliDirname, '..', '..', 'package.json');
+  return JSON.parse(fsSync.readFileSync(pkgPath, 'utf-8')).version;
+}
+
+function printStalenessWarning(config: UnrealConfig): void {
+  const cliVersion = getCliVersion();
+  const installed = config.installed_version;
+  if (!installed) {
+    console.log('  Note: Plugin version unknown — run "gitnexus unreal update" to stamp version.\n');
+  } else if (installed !== cliVersion) {
+    console.log(`  Warning: Plugin was installed by gitnexus v${installed} but you are running v${cliVersion}.`);
+    console.log('  Run "gitnexus unreal update" to update the commandlet plugin.\n');
+  }
+}
 
 // ─── init ──────────────────────────────────────────────────────────────
 
@@ -148,6 +172,8 @@ export async function unrealSyncCommand(options?: {
     process.exit(1);
   }
 
+  printStalenessWarning(config);
+
   const { syncUnrealAssetManifest } = await import('../unreal/bridge.js');
   const { withUnrealProgress } = await import('./unreal-progress.js');
 
@@ -237,7 +263,7 @@ export async function unrealStatusCommand(options?: {
     }
   }
 
-  // Plugin version
+  // Plugin version and staleness check
   const projectPath = manifest.project_path;
   if (projectPath) {
     const projectDir = path.dirname(projectPath);
@@ -249,6 +275,34 @@ export async function unrealStatusCommand(options?: {
         console.log(`  Plugin:      v${uplugin.VersionName}`);
       }
     } catch { /* plugin file not found */ }
+
+    // Check junction health
+    const pluginDir = path.join(projectDir, 'Plugins', 'GitNexusUnreal');
+    try {
+      const target = await fs.readlink(pluginDir);
+      console.log(`  Link:        ${pluginDir} -> ${target}`);
+    } catch {
+      const pluginExists = await fs.stat(pluginDir).catch(() => null);
+      if (pluginExists) {
+        console.log('  Link:        (direct copy — run "gitnexus unreal update" to convert to junction)');
+      }
+    }
+
+    // Version staleness
+    const { loadUnrealConfig } = await import('../unreal/config.js');
+    const config = await loadUnrealConfig(storagePath, gitRoot);
+    if (config) {
+      const cliVersion = getCliVersion();
+      const installed = config.installed_version;
+      if (!installed) {
+        console.log('  Version:     Unknown — run "gitnexus unreal update" to stamp');
+      } else if (installed === cliVersion) {
+        console.log(`  Version:     v${installed} (up to date)`);
+      } else {
+        console.log(`  Version:     v${installed} -> v${cliVersion} available`);
+        console.log('               Run "gitnexus unreal update" to update');
+      }
+    }
   }
 
   console.log('');
@@ -367,4 +421,140 @@ export async function unrealSetupCommand(options?: {
   console.log('  Setup complete!');
   console.log('  Run: gitnexus analyze   to index the C++ codebase');
   console.log('');
+}
+
+// ─── update ───────────────────────────────────────────────────────────
+
+export async function unrealUpdateCommand(options?: {
+  project?: string;
+  build?: boolean;
+}): Promise<void> {
+  const projectRoot = path.resolve(options?.project || process.cwd());
+
+  // Find .uproject for build step
+  let uprojectPath: string;
+  try {
+    uprojectPath = await findUProjectFile(projectRoot);
+  } catch (err: any) {
+    console.error(`Error: ${err.message}`);
+    process.exit(1);
+  }
+  const projectName = path.basename(uprojectPath, '.uproject');
+
+  // Load existing config for editor_cmd
+  const gitRoot = getGitRoot(projectRoot);
+  if (!gitRoot) {
+    console.error('Error: Not inside a git repository.');
+    process.exit(1);
+  }
+  const { storagePath } = getStoragePaths(gitRoot);
+  const { loadUnrealConfig } = await import('../unreal/config.js');
+  const config = await loadUnrealConfig(storagePath, gitRoot);
+
+  if (!config) {
+    console.error('Error: No Unreal config found. Run "gitnexus unreal setup" first.');
+    process.exit(1);
+  }
+
+  // Step 1: Update junction and version stamp
+  console.log('\n  [1/2] Updating plugin...');
+  try {
+    const result = await updateUnrealPlugin({ projectRoot });
+    if (result.previousVersion) {
+      console.log(`        v${result.previousVersion} -> v${result.newVersion}`);
+    } else {
+      console.log(`        Stamped v${result.newVersion}`);
+    }
+    if (result.junctionRecreated) {
+      console.log(`        Junction -> ${result.pluginSource}`);
+    } else {
+      console.log('        Junction unchanged (already correct)');
+    }
+  } catch (err: any) {
+    console.error(`Error: ${err.message}`);
+    process.exit(1);
+  }
+
+  // Step 2: Rebuild editor target
+  if (options?.build === false) {
+    console.log('\n  Skipping build (--no-build).');
+    console.log('  Remember to rebuild the editor target before running sync.\n');
+    return;
+  }
+
+  console.log('');
+  console.log(`  [2/2] Rebuilding ${projectName}Editor...`);
+  console.log('');
+  try {
+    await buildUnrealPlugin(config.editor_cmd, projectName, uprojectPath);
+  } catch (err: any) {
+    console.error('');
+    console.error(`Error: Build failed — ${err.message}`);
+    process.exit(1);
+  }
+
+  console.log('\n  Update complete!\n');
+}
+
+// ─── remove ───────────────────────────────────────────────────────────
+
+export async function unrealRemoveCommand(options?: {
+  project?: string;
+  yes?: boolean;
+  keepConfig?: boolean;
+}): Promise<void> {
+  const projectRoot = path.resolve(options?.project || process.cwd());
+
+  // Check plugin exists
+  const pluginDir = path.join(projectRoot, 'Plugins', 'GitNexusUnreal');
+  const pluginExists = await fs.stat(pluginDir).catch(() => null);
+
+  if (!pluginExists) {
+    console.log('GitNexusUnreal plugin is not installed in this project.');
+    return;
+  }
+
+  // Show what will be removed
+  const toRemove = [pluginDir];
+  const unrealStorageDir = path.join(projectRoot, '.gitnexus', 'unreal');
+  if (await fs.stat(unrealStorageDir).catch(() => null)) {
+    toRemove.push(unrealStorageDir);
+  }
+  if (!options?.keepConfig) {
+    const sharedConfig = path.join(projectRoot, '.gitnexus-unreal.json');
+    if (await fs.stat(sharedConfig).catch(() => null)) {
+      toRemove.push(sharedConfig);
+    }
+  }
+
+  console.log('\n  Will remove:');
+  for (const p of toRemove) {
+    console.log(`    - ${p}`);
+  }
+  if (options?.keepConfig) {
+    console.log('  (keeping .gitnexus-unreal.json)');
+  }
+
+  // Confirm unless --yes
+  if (!options?.yes) {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      const answer = await rl.question('\n  Proceed? [y/N] ');
+      if (answer.trim().toLowerCase() !== 'y') {
+        console.log('  Cancelled.\n');
+        return;
+      }
+    } finally {
+      rl.close();
+    }
+  }
+
+  // Remove
+  const result = await removeUnrealPlugin({
+    projectRoot,
+    keepConfig: options?.keepConfig,
+  });
+
+  console.log(`\n  Removed ${result.removed.length} item(s).`);
+  console.log('  Note: You may need to regenerate project files and rebuild the editor.\n');
 }

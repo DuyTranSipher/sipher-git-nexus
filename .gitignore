@@ -70,3 +70,6 @@ gitnexus/test/fixtures/lang-resolution/**/bin
 GitNexus.sln
 # Git worktrees
 .worktrees/
+
+# Vendor plugin (auto-generated at prepack time from gitnexus-unreal/)
+gitnexus/vendor/GitNexusUnreal/

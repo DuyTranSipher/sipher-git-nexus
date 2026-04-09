@@ -48,7 +48,8 @@
     "test:coverage": "vitest run --coverage",
     "prepare": "npm run build",
     "postinstall": "node scripts/patch-tree-sitter-swift.cjs",
-    "prepack": "npm run build && node scripts/ensure-cli-executable.cjs"
+    "sync-vendor": "node scripts/sync-vendor-plugin.cjs",
+    "prepack": "npm run sync-vendor && npm run build && node scripts/ensure-cli-executable.cjs"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.0.0",

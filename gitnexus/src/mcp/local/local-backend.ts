@@ -34,7 +34,7 @@ import type {
   UnrealAssetManifest,
   UnrealBlueprintCandidate,
 } from '../../unreal/types.js';
-import { UE_ASSET_LABELS, UE_FTS_TABLES } from '../../unreal/asset-types.js';
+import { UE_ASSET_LABELS, UE_FTS_TABLES, UE_LABEL_MAP } from '../../unreal/asset-types.js';
 // AI context generation is CLI-only (gitnexus analyze)
 // import { generateAIContextFiles } from '../../cli/ai-context.js';
 
@@ -358,6 +358,8 @@ export class LocalBackend {
         return this.expandBlueprintChainTool(repo, params);
       case 'find_blueprints_derived_from_native_class':
         return this.findBlueprintsDerivedFromNativeClassTool(repo, params);
+      case 'find_blueprints':
+        return this.findBlueprintsTool(repo, params);
       // Legacy aliases for backwards compatibility
       case 'search':
         return this.query(repo, params);
@@ -671,9 +673,127 @@ export class LocalBackend {
     };
   }
 
+  private async findBlueprintsTool(repo: RepoHandle, params: {
+    parent_class?: string;
+    component_class?: string;
+    interface?: string;
+    has_variable?: string;
+    has_replicated_variable?: boolean;
+    gameplay_tag?: string;
+    asset_type?: string;
+    name_pattern?: string;
+    max_results?: number;
+  }): Promise<any> {
+    const hasAnyFilter = params.parent_class || params.component_class || params.interface
+      || params.has_variable || params.has_replicated_variable || params.gameplay_tag
+      || params.asset_type || params.name_pattern;
+    if (!hasAnyFilter) {
+      return { error: 'At least one filter parameter is required.' };
+    }
+
+    const unrealState = await this.ensureUnrealReady(repo, false);
+    if ('error' in unrealState) {
+      return unrealState;
+    }
+
+    const filtersApplied: string[] = [];
+    let results = unrealState.manifest.assets;
+
+    if (params.parent_class) {
+      const needle = params.parent_class.trim().toLowerCase();
+      results = results.filter(a =>
+        (a.native_parents || []).some(p => p.toLowerCase() === needle || p.toLowerCase().endsWith(`.${needle}`))
+      );
+      filtersApplied.push(`parent_class=${params.parent_class}`);
+    }
+
+    if (params.component_class) {
+      const needle = params.component_class.trim().toLowerCase();
+      results = results.filter(a =>
+        (a.components || []).some(c => c.component_class.toLowerCase() === needle)
+      );
+      filtersApplied.push(`component_class=${params.component_class}`);
+    }
+
+    if (params.interface) {
+      const needle = params.interface.trim().toLowerCase();
+      results = results.filter(a =>
+        (a.implements_interfaces || []).some(i => {
+          const name = i.lastIndexOf('.') >= 0 ? i.slice(i.lastIndexOf('.') + 1) : i;
+          return name.toLowerCase() === needle;
+        })
+      );
+      filtersApplied.push(`interface=${params.interface}`);
+    }
+
+    if (params.has_variable) {
+      const needle = params.has_variable.trim().toLowerCase();
+      results = results.filter(a =>
+        (a.variables || []).some(v => v.name.toLowerCase() === needle)
+      );
+      filtersApplied.push(`has_variable=${params.has_variable}`);
+    }
+
+    if (params.has_replicated_variable) {
+      results = results.filter(a =>
+        (a.variables || []).some(v => v.replicated === true)
+      );
+      filtersApplied.push('has_replicated_variable=true');
+    }
+
+    if (params.gameplay_tag) {
+      const needle = params.gameplay_tag.trim().toLowerCase();
+      results = results.filter(a =>
+        (a.gameplay_tags || []).some(t => t.toLowerCase() === needle || t.toLowerCase().startsWith(needle + '.'))
+      );
+      filtersApplied.push(`gameplay_tag=${params.gameplay_tag}`);
+    }
+
+    if (params.asset_type) {
+      const needle = params.asset_type.trim();
+      results = results.filter(a => {
+        if (!a.asset_class) return false;
+        const dot = a.asset_class.lastIndexOf('.');
+        const className = dot >= 0 ? a.asset_class.slice(dot + 1) : a.asset_class;
+        const label = UE_LABEL_MAP[className] || 'Blueprint';
+        return label === needle;
+      });
+      filtersApplied.push(`asset_type=${params.asset_type}`);
+    }
+
+    if (params.name_pattern) {
+      const needle = params.name_pattern.trim().toLowerCase();
+      results = results.filter(a => {
+        const lastSlash = a.asset_path.lastIndexOf('/');
+        const name = lastSlash >= 0 ? a.asset_path.slice(lastSlash + 1) : a.asset_path;
+        return name.toLowerCase().includes(needle);
+      });
+      filtersApplied.push(`name_pattern=${params.name_pattern}`);
+    }
+
+    const maxResults = params.max_results || 100;
+    const blueprints = results.slice(0, maxResults).map(a => ({
+      asset_path: a.asset_path,
+      asset_class: a.asset_class,
+      parent_class: a.parent_class,
+      native_parents: a.native_parents,
+      component_count: a.components?.length,
+      variable_count: a.variables?.length,
+      has_replicated: a.variables?.some(v => v.replicated) || false,
+    }));
+
+    return {
+      filters_applied: filtersApplied,
+      result_count: results.length,
+      showing: blueprints.length,
+      manifest_mode: unrealState.manifest.mode || 'unknown',
+      blueprints,
+    };
+  }
+
   /**
    * Query tool — process-grouped search.
-   * 
+   *
    * 1. Hybrid search (BM25 + semantic) to find matching symbols
    * 2. Trace each match to its process(es) via STEP_IN_PROCESS
    * 3. Group by process, rank by aggregate relevance + internal cluster cohesion

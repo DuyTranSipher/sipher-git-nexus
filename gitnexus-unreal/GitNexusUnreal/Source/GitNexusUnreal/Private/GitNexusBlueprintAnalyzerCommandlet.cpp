@@ -27,6 +27,23 @@
 #include "UObject/SoftObjectPath.h"
 #include "UObject/GarbageCollection.h"
 #include "Internationalization/Regex.h"
+#include "Engine/SimpleConstructionScript.h"
+#include "Engine/SCS_Node.h"
+#include "Animation/AnimBlueprint.h"
+#include "AnimGraphNode_StateMachineBase.h"
+#include "AnimationStateMachineGraph.h"
+#include "AnimStateNode.h"
+#include "AnimStateTransitionNode.h"
+#include "AnimStateConduitNode.h"
+#include "BehaviorTree/BehaviorTree.h"
+#include "BehaviorTree/BTCompositeNode.h"
+#include "BehaviorTree/BTTaskNode.h"
+#include "BehaviorTree/BTDecorator.h"
+#include "BehaviorTree/BTService.h"
+#include "EnvironmentQuery/EnvQuery.h"
+#include "EnvironmentQuery/EnvQueryOption.h"
+#include "EnvironmentQuery/EnvQueryGenerator.h"
+#include "EnvironmentQuery/EnvQueryTest.h"
 #include "GameplayTagContainer.h"
 
 UGitNexusBlueprintAnalyzerCommandlet::UGitNexusBlueprintAnalyzerCommandlet()
@@ -272,7 +289,7 @@ int32 UGitNexusBlueprintAnalyzerCommandlet::RunSyncAssetsDeep(
 		}
 		if (!Blueprint)
 		{
-			// Non-Blueprint asset (e.g. UStateTree / UDataAsset): emit metadata-only entry
+			// Non-Blueprint asset: emit common metadata + type-specific graph data
 			TSharedPtr<FJsonObject> AssetObject = MakeShared<FJsonObject>();
 			AssetObject->SetStringField(TEXT("asset_path"), AssetData.GetSoftObjectPath().ToString());
 			AssetObject->SetStringField(TEXT("asset_class"), AssetData.AssetClassPath.ToString());
@@ -287,6 +304,145 @@ int32 UGitNexusBlueprintAnalyzerCommandlet::RunSyncAssetsDeep(
 			{
 				AssetObject->SetStringField(TEXT("file_modified_at"), NonBpMtime);
 			}
+
+			// ── Type-specific extraction for non-Blueprint assets ────────
+			if (UBehaviorTree* BT = Cast<UBehaviorTree>(LoadedAsset))
+			{
+				if (BT->RootNode)
+				{
+					TArray<TSharedPtr<FJsonValue>> BTNodeValues;
+					int32 NodeIndex = 0;
+
+					// Recursive lambda for DFS traversal
+					TFunction<void(UBTCompositeNode*, int32, int32)> TraverseBT;
+					TraverseBT = [&](UBTCompositeNode* CompositeNode, int32 Depth, int32 ParentIdx)
+					{
+						if (!CompositeNode) return;
+
+						// Emit composite node
+						TSharedPtr<FJsonObject> CompObj = MakeShared<FJsonObject>();
+						CompObj->SetStringField(TEXT("node_class"), CompositeNode->GetClass()->GetName());
+						CompObj->SetStringField(TEXT("node_name"), CompositeNode->GetNodeName());
+						CompObj->SetStringField(TEXT("type"), TEXT("composite"));
+						CompObj->SetNumberField(TEXT("depth"), Depth);
+						if (ParentIdx >= 0)
+						{
+							CompObj->SetNumberField(TEXT("parent_index"), ParentIdx);
+						}
+						const int32 CompositeIdx = NodeIndex++;
+						BTNodeValues.Add(MakeShared<FJsonValueObject>(CompObj));
+
+						// Emit services attached to this composite
+						for (const UBTService* Service : CompositeNode->Services)
+						{
+							if (!Service) continue;
+							TSharedPtr<FJsonObject> SvcObj = MakeShared<FJsonObject>();
+							SvcObj->SetStringField(TEXT("node_class"), Service->GetClass()->GetName());
+							SvcObj->SetStringField(TEXT("node_name"), Service->GetNodeName());
+							SvcObj->SetStringField(TEXT("type"), TEXT("service"));
+							SvcObj->SetNumberField(TEXT("depth"), Depth);
+							SvcObj->SetNumberField(TEXT("attached_to"), CompositeIdx);
+							NodeIndex++;
+							BTNodeValues.Add(MakeShared<FJsonValueObject>(SvcObj));
+						}
+
+						// Traverse children
+						for (int32 i = 0; i < CompositeNode->GetChildrenNum(); i++)
+						{
+							const FBTCompositeChild& Child = CompositeNode->Children[i];
+
+							// Emit decorators on this child
+							for (const UBTDecorator* Decorator : Child.Decorators)
+							{
+								if (!Decorator) continue;
+								TSharedPtr<FJsonObject> DecObj = MakeShared<FJsonObject>();
+								DecObj->SetStringField(TEXT("node_class"), Decorator->GetClass()->GetName());
+								DecObj->SetStringField(TEXT("node_name"), Decorator->GetNodeName());
+								DecObj->SetStringField(TEXT("type"), TEXT("decorator"));
+								DecObj->SetNumberField(TEXT("depth"), Depth + 1);
+								DecObj->SetNumberField(TEXT("attached_to"), CompositeIdx);
+								NodeIndex++;
+								BTNodeValues.Add(MakeShared<FJsonValueObject>(DecObj));
+							}
+
+							if (Child.ChildComposite)
+							{
+								TraverseBT(Child.ChildComposite, Depth + 1, CompositeIdx);
+							}
+							else if (Child.ChildTask)
+							{
+								TSharedPtr<FJsonObject> TaskObj = MakeShared<FJsonObject>();
+								TaskObj->SetStringField(TEXT("node_class"), Child.ChildTask->GetClass()->GetName());
+								TaskObj->SetStringField(TEXT("node_name"), Child.ChildTask->GetNodeName());
+								TaskObj->SetStringField(TEXT("type"), TEXT("task"));
+								TaskObj->SetNumberField(TEXT("depth"), Depth + 1);
+								TaskObj->SetNumberField(TEXT("parent_index"), CompositeIdx);
+								const int32 TaskIdx = NodeIndex++;
+								BTNodeValues.Add(MakeShared<FJsonValueObject>(TaskObj));
+
+								// Services on task nodes
+								for (const UBTService* Service : Child.ChildTask->Services)
+								{
+									if (!Service) continue;
+									TSharedPtr<FJsonObject> SvcObj = MakeShared<FJsonObject>();
+									SvcObj->SetStringField(TEXT("node_class"), Service->GetClass()->GetName());
+									SvcObj->SetStringField(TEXT("node_name"), Service->GetNodeName());
+									SvcObj->SetStringField(TEXT("type"), TEXT("service"));
+									SvcObj->SetNumberField(TEXT("depth"), Depth + 1);
+									SvcObj->SetNumberField(TEXT("attached_to"), TaskIdx);
+									NodeIndex++;
+									BTNodeValues.Add(MakeShared<FJsonValueObject>(SvcObj));
+								}
+							}
+						}
+					};
+
+					TraverseBT(BT->RootNode, 0, -1);
+
+					if (BTNodeValues.Num() > 0)
+					{
+						AssetObject->SetArrayField(TEXT("bt_nodes"), BTNodeValues);
+					}
+				}
+			}
+			else if (UEnvQuery* EQSQuery = Cast<UEnvQuery>(LoadedAsset))
+			{
+				const TArray<UEnvQueryOption*>& Options = EQSQuery->GetOptions();
+				if (Options.Num() > 0)
+				{
+					TArray<TSharedPtr<FJsonValue>> OptionValues;
+					for (const UEnvQueryOption* Option : Options)
+					{
+						if (!Option) continue;
+						TSharedPtr<FJsonObject> OptObj = MakeShared<FJsonObject>();
+
+						if (Option->Generator)
+						{
+							OptObj->SetStringField(TEXT("generator_class"), Option->Generator->GetClass()->GetName());
+							OptObj->SetStringField(TEXT("generator_name"), Option->Generator->GetDescriptionTitle().ToString());
+							if (Option->Generator->ItemType)
+							{
+								OptObj->SetStringField(TEXT("item_type"), Option->Generator->ItemType->GetName());
+							}
+						}
+
+						TArray<TSharedPtr<FJsonValue>> TestValues;
+						for (const UEnvQueryTest* Test : Option->Tests)
+						{
+							if (!Test) continue;
+							TSharedPtr<FJsonObject> TestObj = MakeShared<FJsonObject>();
+							TestObj->SetStringField(TEXT("class"), Test->GetClass()->GetName());
+							TestObj->SetStringField(TEXT("name"), Test->GetDescriptionTitle().ToString());
+							TestValues.Add(MakeShared<FJsonValueObject>(TestObj));
+						}
+						OptObj->SetArrayField(TEXT("tests"), TestValues);
+
+						OptionValues.Add(MakeShared<FJsonValueObject>(OptObj));
+					}
+					AssetObject->SetArrayField(TEXT("eqs_options"), OptionValues);
+				}
+			}
+
 			AssetValues.Add(MakeShared<FJsonValueObject>(AssetObject));
 			continue;
 		}
@@ -478,6 +634,160 @@ int32 UGitNexusBlueprintAnalyzerCommandlet::RunSyncAssetsDeep(
 			AssetObject->SetArrayField(TEXT("gameplay_tags"), TagValues);
 		}
 
+		// ── Blueprint Variables ──────────────────────────────────────────
+		{
+			TArray<TSharedPtr<FJsonValue>> VarValues;
+			const int32 MaxVariables = 200;
+			for (const FBPVariableDescription& Var : Blueprint->NewVariables)
+			{
+				if (VarValues.Num() >= MaxVariables) break;
+				TSharedPtr<FJsonObject> VarObj = MakeShared<FJsonObject>();
+				VarObj->SetStringField(TEXT("name"), Var.VarName.ToString());
+				VarObj->SetStringField(TEXT("type"), Var.VarType.PinCategory.ToString());
+				if (Var.VarType.PinSubCategoryObject.IsValid())
+				{
+					VarObj->SetStringField(TEXT("sub_type"), Var.VarType.PinSubCategoryObject->GetName());
+				}
+				// Container type
+				if (Var.VarType.ContainerType == EPinContainerType::Array)
+					VarObj->SetStringField(TEXT("container"), TEXT("array"));
+				else if (Var.VarType.ContainerType == EPinContainerType::Set)
+					VarObj->SetStringField(TEXT("container"), TEXT("set"));
+				else if (Var.VarType.ContainerType == EPinContainerType::Map)
+					VarObj->SetStringField(TEXT("container"), TEXT("map"));
+				// Property flags — check via generated class property
+				if (Blueprint->GeneratedClass)
+				{
+					if (const FProperty* Prop = Blueprint->GeneratedClass->FindPropertyByName(Var.VarName))
+					{
+						const EPropertyFlags Flags = Prop->GetPropertyFlags();
+						if (Flags & CPF_Net)
+						{
+							VarObj->SetBoolField(TEXT("replicated"), true);
+						}
+						if (Flags & CPF_RepNotify)
+						{
+							VarObj->SetBoolField(TEXT("rep_notify"), true);
+							VarObj->SetStringField(TEXT("rep_notify_func"), Var.RepNotifyFunc.ToString());
+						}
+						if (Flags & CPF_SaveGame)
+						{
+							VarObj->SetBoolField(TEXT("save_game"), true);
+						}
+						if (Flags & CPF_ExposeOnSpawn)
+						{
+							VarObj->SetBoolField(TEXT("expose_on_spawn"), true);
+						}
+					}
+				}
+				// Category
+				const FString Category = FBlueprintEditorUtils::GetBlueprintVariableCategory(Blueprint, Var.VarName, nullptr).ToString();
+				if (!Category.IsEmpty() && Category != TEXT("Default"))
+				{
+					VarObj->SetStringField(TEXT("category"), Category);
+				}
+				VarValues.Add(MakeShared<FJsonValueObject>(VarObj));
+			}
+			if (VarValues.Num() > 0)
+			{
+				AssetObject->SetArrayField(TEXT("variables"), VarValues);
+			}
+		}
+
+		// ── SCS Component Tree ──────────────────────────────────────────
+		if (Blueprint->SimpleConstructionScript)
+		{
+			TArray<TSharedPtr<FJsonValue>> CompValues;
+			const TArray<USCS_Node*>& AllNodes = Blueprint->SimpleConstructionScript->GetAllNodes();
+			for (const USCS_Node* SCSNode : AllNodes)
+			{
+				if (!SCSNode) continue;
+				TSharedPtr<FJsonObject> CompObj = MakeShared<FJsonObject>();
+				CompObj->SetStringField(TEXT("name"), SCSNode->GetVariableName().ToString());
+				CompObj->SetStringField(TEXT("component_class"),
+					SCSNode->ComponentClass ? SCSNode->ComponentClass->GetName() : TEXT("None"));
+				if (!SCSNode->ParentComponentOrVariableName.IsNone())
+				{
+					CompObj->SetStringField(TEXT("parent_name"), SCSNode->ParentComponentOrVariableName.ToString());
+				}
+				CompValues.Add(MakeShared<FJsonValueObject>(CompObj));
+			}
+			if (CompValues.Num() > 0)
+			{
+				AssetObject->SetArrayField(TEXT("components"), CompValues);
+			}
+		}
+
+		// ── AnimBP State Machine Topology ────────────────────────────────
+		if (const UAnimBlueprint* AnimBP = Cast<UAnimBlueprint>(Blueprint))
+		{
+			TArray<TSharedPtr<FJsonValue>> SMValues;
+			for (const UEdGraph* Graph : Graphs)
+			{
+				if (!Graph) continue;
+				for (const UEdGraphNode* Node : Graph->Nodes)
+				{
+					const UAnimGraphNode_StateMachineBase* SMNode = Cast<UAnimGraphNode_StateMachineBase>(Node);
+					if (!SMNode) continue;
+
+					UAnimationStateMachineGraph* SMGraph = SMNode->EditorStateMachineGraph;
+					if (!SMGraph) continue;
+
+					TSharedPtr<FJsonObject> SMObj = MakeShared<FJsonObject>();
+					SMObj->SetStringField(TEXT("name"), SMNode->GetNodeTitle(ENodeTitleType::ListView).ToString());
+
+					TArray<TSharedPtr<FJsonValue>> StateValues;
+					TArray<TSharedPtr<FJsonValue>> TransitionValues;
+
+					for (const UEdGraphNode* SMChild : SMGraph->Nodes)
+					{
+						if (!SMChild) continue;
+
+						if (const UAnimStateNode* StateNode = Cast<UAnimStateNode>(SMChild))
+						{
+							TSharedPtr<FJsonObject> StateObj = MakeShared<FJsonObject>();
+							StateObj->SetStringField(TEXT("name"), StateNode->GetStateName());
+							if (StateNode->BoundGraph)
+							{
+								StateObj->SetStringField(TEXT("graph_name"), StateNode->BoundGraph->GetName());
+							}
+							StateValues.Add(MakeShared<FJsonValueObject>(StateObj));
+						}
+						else if (const UAnimStateTransitionNode* TransNode = Cast<UAnimStateTransitionNode>(SMChild))
+						{
+							const UAnimStateNodeBase* PrevState = TransNode->GetPreviousState();
+							const UAnimStateNodeBase* NextState = TransNode->GetNextState();
+							if (PrevState && NextState)
+							{
+								TSharedPtr<FJsonObject> TransObj = MakeShared<FJsonObject>();
+								TransObj->SetStringField(TEXT("from_state"),
+									PrevState->GetNodeTitle(ENodeTitleType::ListView).ToString());
+								TransObj->SetStringField(TEXT("to_state"),
+									NextState->GetNodeTitle(ENodeTitleType::ListView).ToString());
+								TransitionValues.Add(MakeShared<FJsonValueObject>(TransObj));
+							}
+						}
+						else if (const UAnimStateConduitNode* ConduitNode = Cast<UAnimStateConduitNode>(SMChild))
+						{
+							TSharedPtr<FJsonObject> StateObj = MakeShared<FJsonObject>();
+							StateObj->SetStringField(TEXT("name"),
+								ConduitNode->GetNodeTitle(ENodeTitleType::ListView).ToString());
+							StateObj->SetBoolField(TEXT("is_conduit"), true);
+							StateValues.Add(MakeShared<FJsonValueObject>(StateObj));
+						}
+					}
+
+					SMObj->SetArrayField(TEXT("states"), StateValues);
+					SMObj->SetArrayField(TEXT("transitions"), TransitionValues);
+					SMValues.Add(MakeShared<FJsonValueObject>(SMObj));
+				}
+			}
+			if (SMValues.Num() > 0)
+			{
+				AssetObject->SetArrayField(TEXT("state_machines"), SMValues);
+			}
+		}
+
 		// ── Blueprint Execution Flows ────────────────────────────────────
 		TArray<TSharedPtr<FJsonValue>> FlowValues;
 		for (const UEdGraph* Graph : Graphs)
@@ -512,6 +822,30 @@ int32 UGitNexusBlueprintAnalyzerCommandlet::RunSyncAssetsDeep(
 						{
 							StepObj->SetStringField(TEXT("graph_name"), Graph->GetName());
 						}
+						// ── Data pin types for CallFunction nodes (enables data-flow queries) ──
+						if (const UK2Node_CallFunction* CallNode = Cast<UK2Node_CallFunction>(Current))
+						{
+							TArray<TSharedPtr<FJsonValue>> DataPinTypes;
+							for (const UEdGraphPin* Pin : Current->Pins)
+							{
+								if (!Pin || Pin->Direction != EGPD_Input) continue;
+								if (Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_Exec) continue;
+								if (Pin->bHidden) continue;
+								TSharedPtr<FJsonObject> PinInfo = MakeShared<FJsonObject>();
+								PinInfo->SetStringField(TEXT("name"), Pin->PinName.ToString());
+								PinInfo->SetStringField(TEXT("type"), Pin->PinType.PinCategory.ToString());
+								if (Pin->PinType.PinSubCategoryObject.IsValid())
+								{
+									PinInfo->SetStringField(TEXT("sub_type"), Pin->PinType.PinSubCategoryObject->GetName());
+								}
+								DataPinTypes.Add(MakeShared<FJsonValueObject>(PinInfo));
+							}
+							if (DataPinTypes.Num() > 0)
+							{
+								StepObj->SetArrayField(TEXT("data_pins"), DataPinTypes);
+							}
+						}
+
 						StepValues.Add(MakeShared<FJsonValueObject>(StepObj));
 
 						// Follow exec output pins

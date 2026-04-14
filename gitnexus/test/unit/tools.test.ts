@@ -12,7 +12,7 @@ import { GITNEXUS_TOOLS, type ToolDefinition } from '../../src/mcp/tools.js';
 
 describe('GITNEXUS_TOOLS', () => {
   it('exports exactly 7 tools', () => {
-    expect(GITNEXUS_TOOLS).toHaveLength(11);
+    expect(GITNEXUS_TOOLS).toHaveLength(12);
   });
 
   it('contains all expected tool names', () => {
@@ -25,6 +25,7 @@ describe('GITNEXUS_TOOLS', () => {
         'find_native_blueprint_references',
         'expand_blueprint_chain',
         'find_blueprints_derived_from_native_class',
+        'find_blueprints',
       ])
     );
   });

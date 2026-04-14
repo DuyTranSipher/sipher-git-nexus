@@ -196,4 +196,298 @@ describe('blueprint-ingestion', () => {
       expect(node!.label).toBe('Blueprint');
     });
   });
+
+  describe('SCS component USES edges', () => {
+    it('creates USES edge from Blueprint to C++ component class', async () => {
+      await writeManifest([
+        {
+          asset_path: '/Game/BP_Hero',
+          native_parents: ['ACharacter'],
+          components: [
+            { name: 'RootComp', component_class: 'SceneComponent' },
+            { name: 'MeshComp', component_class: 'StaticMeshComponent', parent_name: 'RootComp' },
+            { name: 'CameraComp', component_class: 'CameraComponent', parent_name: 'RootComp' },
+          ],
+        },
+      ]);
+
+      // Add C++ class nodes for components
+      graph.addNode({
+        id: 'class-scenecomp',
+        label: 'Class',
+        properties: { name: 'SceneComponent', filePath: 'SceneComponent.h', startLine: 1, endLine: 100 },
+      });
+      graph.addNode({
+        id: 'class-staticmesh',
+        label: 'Class',
+        properties: { name: 'StaticMeshComponent', filePath: 'StaticMeshComponent.h', startLine: 1, endLine: 100 },
+      });
+      graph.addNode({
+        id: 'class-camera',
+        label: 'Class',
+        properties: { name: 'CameraComponent', filePath: 'CameraComponent.h', startLine: 1, endLine: 100 },
+      });
+
+      const result = await ingestBlueprintsIntoGraph(graph, tmpDir);
+      expect(result.nodesAdded).toBe(1);
+
+      const usesEdges = graph.relationships.filter(r => r.type === 'USES' && r.reason === 'blueprint-component');
+      expect(usesEdges.length).toBe(3);
+      expect(usesEdges[0].confidence).toBe(0.95);
+    });
+
+    it('deduplicates USES edges for same component class', async () => {
+      await writeManifest([
+        {
+          asset_path: '/Game/BP_Room',
+          components: [
+            { name: 'Light1', component_class: 'PointLightComponent' },
+            { name: 'Light2', component_class: 'PointLightComponent' },
+          ],
+        },
+      ]);
+
+      graph.addNode({
+        id: 'class-pointlight',
+        label: 'Class',
+        properties: { name: 'PointLightComponent', filePath: 'PointLight.h', startLine: 1, endLine: 50 },
+      });
+
+      const result = await ingestBlueprintsIntoGraph(graph, tmpDir);
+      const usesEdges = graph.relationships.filter(r => r.type === 'USES' && r.reason === 'blueprint-component');
+      // Only one edge despite two instances of the same class
+      expect(usesEdges.length).toBe(1);
+    });
+
+    it('skips components with class None', async () => {
+      await writeManifest([
+        {
+          asset_path: '/Game/BP_Test',
+          components: [
+            { name: 'BadComp', component_class: 'None' },
+          ],
+        },
+      ]);
+
+      await ingestBlueprintsIntoGraph(graph, tmpDir);
+      const usesEdges = graph.relationships.filter(r => r.type === 'USES');
+      expect(usesEdges.length).toBe(0);
+    });
+  });
+
+  describe('AnimBP state machine Process nodes', () => {
+    it('creates Process node for state machine with CONTAINS edge', async () => {
+      await writeManifest([
+        {
+          asset_path: '/Game/Anim/ABP_Hero',
+          asset_class: '/Script/Engine.AnimBlueprint',
+          native_parents: ['UAnimInstance'],
+          state_machines: [
+            {
+              name: 'Locomotion',
+              states: [
+                { name: 'Idle', graph_name: 'Idle_Graph' },
+                { name: 'Run', graph_name: 'Run_Graph' },
+                { name: 'Jump', graph_name: 'Jump_Graph' },
+              ],
+              transitions: [
+                { from_state: 'Idle', to_state: 'Run' },
+                { from_state: 'Run', to_state: 'Idle' },
+                { from_state: 'Run', to_state: 'Jump' },
+              ],
+            },
+          ],
+        },
+      ]);
+
+      const result = await ingestBlueprintsIntoGraph(graph, tmpDir);
+
+      // 1 AnimBlueprint node + 1 Process node for the state machine
+      expect(result.nodesAdded).toBe(2);
+
+      // Find the Process node
+      const processNode = graph.nodes.find(n => n.label === 'Process' && n.properties.processType === 'state_machine');
+      expect(processNode).toBeDefined();
+      expect(processNode!.properties.name).toBe('ABP_Hero::Locomotion');
+      expect(processNode!.properties.stepCount).toBe(3);
+
+      // CONTAINS edge from AnimBlueprint to Process
+      const containsEdges = graph.relationships.filter(
+        r => r.type === 'CONTAINS' && r.reason === 'animblueprint-state-machine'
+      );
+      expect(containsEdges.length).toBe(1);
+
+      // STEP_IN_PROCESS edges — one per state
+      const stepEdges = graph.relationships.filter(
+        r => r.type === 'STEP_IN_PROCESS' && r.reason === 'animblueprint-state'
+      );
+      expect(stepEdges.length).toBe(3);
+    });
+
+    it('skips state machine with no states', async () => {
+      await writeManifest([
+        {
+          asset_path: '/Game/Anim/ABP_Empty',
+          asset_class: '/Script/Engine.AnimBlueprint',
+          state_machines: [
+            { name: 'EmptySM', states: [], transitions: [] },
+          ],
+        },
+      ]);
+
+      const result = await ingestBlueprintsIntoGraph(graph, tmpDir);
+      // Only the AnimBlueprint node, no Process
+      expect(result.nodesAdded).toBe(1);
+    });
+  });
+
+  describe('Blueprint variable RepNotify CALLS edges', () => {
+    it('creates CALLS edge for replicated variable with RepNotify', async () => {
+      await writeManifest([
+        {
+          asset_path: '/Game/BP_Hero',
+          native_parents: ['ACharacter'],
+          variables: [
+            { name: 'Health', type: 'real', replicated: true, rep_notify: true, rep_notify_func: 'OnRep_Health' },
+            { name: 'Speed', type: 'real' },
+            { name: 'Inventory', type: 'object', container: 'array', save_game: true },
+          ],
+        },
+      ]);
+
+      // Add C++ class and rep notify method
+      graph.addNode({
+        id: 'class-acharacter',
+        label: 'Class',
+        properties: { name: 'ACharacter', filePath: 'Character.h', startLine: 1, endLine: 100 },
+      });
+      graph.addNode({
+        id: 'method-onrep-health',
+        label: 'Method',
+        properties: { name: 'OnRep_Health', filePath: 'Character.cpp', startLine: 50, endLine: 60 },
+      });
+
+      const result = await ingestBlueprintsIntoGraph(graph, tmpDir);
+
+      const repNotifyEdges = graph.relationships.filter(
+        r => r.type === 'CALLS' && r.reason === 'blueprint-rep-notify'
+      );
+      expect(repNotifyEdges.length).toBe(1);
+      expect(repNotifyEdges[0].confidence).toBe(1.0);
+
+      const target = graph.getNode(repNotifyEdges[0].targetId);
+      expect(target?.properties.name).toBe('OnRep_Health');
+    });
+
+    it('does not create CALLS edge for non-replicated variables', async () => {
+      await writeManifest([
+        {
+          asset_path: '/Game/BP_Simple',
+          variables: [
+            { name: 'Score', type: 'int' },
+            { name: 'Name', type: 'string' },
+          ],
+        },
+      ]);
+
+      await ingestBlueprintsIntoGraph(graph, tmpDir);
+      const repNotifyEdges = graph.relationships.filter(
+        r => r.type === 'CALLS' && r.reason === 'blueprint-rep-notify'
+      );
+      expect(repNotifyEdges.length).toBe(0);
+    });
+  });
+
+  describe('BehaviorTree CALLS edges and Process nodes', () => {
+    it('creates CALLS edges for BT task classes and Process node', async () => {
+      await writeManifest([
+        {
+          asset_path: '/Game/AI/BT_Patrol',
+          asset_class: '/Script/AIModule.BehaviorTree',
+          bt_nodes: [
+            { node_class: 'BTComposite_Sequence', node_name: 'Sequence', type: 'composite', depth: 0 },
+            { node_class: 'BTTask_MoveTo', node_name: 'Move To', type: 'task', depth: 1, parent_index: 0 },
+            { node_class: 'BTTask_Wait', node_name: 'Wait', type: 'task', depth: 1, parent_index: 0 },
+            { node_class: 'BTDecorator_Blackboard', node_name: 'Blackboard', type: 'decorator', depth: 1, attached_to: 0 },
+            { node_class: 'BTService_DefaultFocus', node_name: 'Focus', type: 'service', depth: 0, attached_to: 0 },
+          ],
+        },
+      ]);
+
+      // Add C++ class nodes for BT tasks
+      graph.addNode({
+        id: 'class-btmoveto',
+        label: 'Class',
+        properties: { name: 'BTTask_MoveTo', filePath: 'BTTask_MoveTo.h', startLine: 1, endLine: 50 },
+      });
+      graph.addNode({
+        id: 'class-btdecorator',
+        label: 'Class',
+        properties: { name: 'BTDecorator_Blackboard', filePath: 'BTDecorator_Blackboard.h', startLine: 1, endLine: 50 },
+      });
+
+      const result = await ingestBlueprintsIntoGraph(graph, tmpDir);
+
+      // BehaviorTree node + Process node
+      expect(result.nodesAdded).toBe(2);
+
+      // Process node
+      const processNode = graph.nodes.find(n => n.label === 'Process' && n.properties.processType === 'behavior_tree');
+      expect(processNode).toBeDefined();
+      expect(processNode!.properties.name).toBe('BT_Patrol::Root');
+
+      // CALLS edges for matched C++ classes
+      const btCallEdges = graph.relationships.filter(r =>
+        r.type === 'CALLS' && (r.reason === 'behaviortree-task' || r.reason === 'behaviortree-decorator')
+      );
+      expect(btCallEdges.length).toBe(2);
+
+      // CONTAINS edge
+      const containsEdges = graph.relationships.filter(r =>
+        r.type === 'CONTAINS' && r.reason === 'behaviortree-root'
+      );
+      expect(containsEdges.length).toBe(1);
+    });
+  });
+
+  describe('EQS CALLS edges', () => {
+    it('creates CALLS edges for EQS generator and test classes', async () => {
+      await writeManifest([
+        {
+          asset_path: '/Game/AI/EQS_FindCover',
+          asset_class: '/Script/AIModule.EnvironmentQuery',
+          eqs_options: [
+            {
+              generator_class: 'EnvQueryGenerator_SimpleGrid',
+              generator_name: 'Simple Grid',
+              item_type: 'EnvQueryItemType_Point',
+              tests: [
+                { class: 'EnvQueryTest_Distance', name: 'Distance' },
+                { class: 'EnvQueryTest_Trace', name: 'Trace' },
+              ],
+            },
+          ],
+        },
+      ]);
+
+      graph.addNode({
+        id: 'class-eqsgrid',
+        label: 'Class',
+        properties: { name: 'EnvQueryGenerator_SimpleGrid', filePath: 'EQS.h', startLine: 1, endLine: 50 },
+      });
+      graph.addNode({
+        id: 'class-eqsdist',
+        label: 'Class',
+        properties: { name: 'EnvQueryTest_Distance', filePath: 'EQS.h', startLine: 51, endLine: 100 },
+      });
+
+      const result = await ingestBlueprintsIntoGraph(graph, tmpDir);
+
+      const eqsCallEdges = graph.relationships.filter(r =>
+        r.type === 'CALLS' && (r.reason === 'eqs-generator' || r.reason === 'eqs-test')
+      );
+      // Generator + Distance test = 2 matched classes
+      expect(eqsCallEdges.length).toBe(2);
+    });
+  });
 });

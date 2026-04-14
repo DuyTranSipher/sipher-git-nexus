@@ -17,6 +17,16 @@ export interface UnrealAssetManifestAsset {
   gameplay_tags?: string[];
   /** Blueprint execution flows extracted at index time (deep mode only) */
   flows?: { event_name: string; steps: UnrealChainNode[] }[];
+  /** Blueprint variables with types and flags (deep mode only) */
+  variables?: UnrealBlueprintVariable[];
+  /** Simple Construction Script component tree (deep mode only) */
+  components?: UnrealBlueprintComponent[];
+  /** AnimBlueprint state machine topology (deep mode only) */
+  state_machines?: UnrealAnimStateMachine[];
+  /** BehaviorTree node tree (deep mode, BT assets only) */
+  bt_nodes?: UnrealBTNode[];
+  /** Environment Query options with generators and tests (deep mode, EQS assets only) */
+  eqs_options?: UnrealEQSOption[];
   /** ISO timestamp of the .uasset file's last modification time. Used for incremental change detection. */
   file_modified_at?: string;
 }
@@ -147,6 +157,53 @@ export interface UnrealChainNodeDetails {
   branch_type?: 'if_then_else' | 'switch';
 }
 
+export interface UnrealFlowDataPin {
+  name: string;
+  type: string;
+  sub_type?: string;
+}
+
+export interface UnrealBlueprintVariable {
+  name: string;
+  type: string;
+  sub_type?: string;
+  container?: 'array' | 'set' | 'map';
+  replicated?: boolean;
+  rep_notify?: boolean;
+  rep_notify_func?: string;
+  save_game?: boolean;
+  expose_on_spawn?: boolean;
+  category?: string;
+}
+
+export interface UnrealBlueprintComponent {
+  name: string;
+  component_class: string;
+  parent_name?: string;
+}
+
+export interface UnrealAnimStateMachine {
+  name: string;
+  states: { name: string; graph_name?: string; is_conduit?: boolean }[];
+  transitions: { from_state: string; to_state: string }[];
+}
+
+export interface UnrealBTNode {
+  node_class: string;
+  node_name?: string;
+  type: 'composite' | 'task' | 'decorator' | 'service';
+  depth: number;
+  parent_index?: number;
+  attached_to?: number;
+}
+
+export interface UnrealEQSOption {
+  generator_class: string;
+  generator_name?: string;
+  item_type?: string;
+  tests: { class: string; name?: string }[];
+}
+
 export interface UnrealChainNode {
   node_id: string;
   graph_name?: string;
@@ -163,6 +220,8 @@ export interface UnrealChainNode {
   pins?: UnrealChainNodePins;
   // Phase 2: type-specific details
   details?: UnrealChainNodeDetails;
+  // Data pin types for flow steps (enables data-flow queries)
+  data_pins?: UnrealFlowDataPin[];
 }
 
 export interface SyncUnrealAssetManifestResult {

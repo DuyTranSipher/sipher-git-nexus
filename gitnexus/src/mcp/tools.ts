@@ -125,6 +125,31 @@ AFTER THIS: Use find_native_blueprint_references() for function-level graph refe
     },
   },
   {
+    name: 'find_blueprints',
+    description: `Search Blueprint assets with rich filtering by parent class, component, interface, variable, or gameplay tag.
+Queries the asset manifest for matching Blueprints. Works with both metadata and deep mode manifests.
+
+WHEN TO USE: To discover Blueprints matching specific criteria — e.g., "all Blueprints with CameraComponent",
+"all Blueprints implementing IInteractable", "all Blueprints with replicated variables".
+AFTER THIS: Use context() on a result for full relationship view, or find_native_blueprint_references() for call-site detail.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        parent_class: { type: 'string', description: 'Filter by native parent class name (e.g., "ACharacter"). Case-insensitive.' },
+        component_class: { type: 'string', description: 'Filter by SCS component class (e.g., "CameraComponent"). Requires deep mode manifest.' },
+        interface: { type: 'string', description: 'Filter by implemented interface (e.g., "IInteractable"). Requires deep mode manifest.' },
+        has_variable: { type: 'string', description: 'Filter by variable name (e.g., "Health"). Requires deep mode manifest.' },
+        has_replicated_variable: { type: 'boolean', description: 'Filter to Blueprints with any replicated variable. Requires deep mode manifest.' },
+        gameplay_tag: { type: 'string', description: 'Filter by referenced gameplay tag prefix (e.g., "Ability.Attack"). Requires deep mode manifest.' },
+        asset_type: { type: 'string', description: 'Filter by asset type label (e.g., "AnimBlueprint", "WidgetBlueprint", "GameplayAbility").' },
+        name_pattern: { type: 'string', description: 'Filter by asset name substring (case-insensitive).' },
+        max_results: { type: 'number', description: 'Maximum results to return.', default: 100 },
+        repo: { type: 'string', description: 'Repository name or path. Omit if only one repo is indexed.' },
+      },
+      required: [],
+    },
+  },
+  {
     name: 'query',
     description: `Query the code knowledge graph for execution flows related to a concept.
 Returns processes (call chains) ranked by relevance, each with its symbols and file locations.

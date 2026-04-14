@@ -15,6 +15,8 @@ public class GitNexusUnreal : ModuleRules
 
         PrivateDependencyModuleNames.AddRange(new[]
         {
+            "AIModule",
+            "AnimGraph",
             "AssetRegistry",
             "BlueprintGraph",
             "GameplayTags",

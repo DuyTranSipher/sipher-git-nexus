@@ -426,7 +426,226 @@ export const ingestBlueprintsIntoGraph = async (
     }
   }
 
-  // ── Sixth pass: Blueprint Execution Flows as Process nodes ─────
+  // ── Sixth pass: USES edges for SCS components ─────────────────
+  for (const asset of assets) {
+    const comps = asset.components || [];
+    if (comps.length === 0) continue;
+
+    const sourceBpId = blueprintIdByAssetPath.get(asset.asset_path);
+    if (!sourceBpId) continue;
+
+    const seenClasses = new Set<string>();
+    for (const comp of comps) {
+      if (!comp.component_class || comp.component_class === 'None') continue;
+      if (seenClasses.has(comp.component_class)) continue;
+      seenClasses.add(comp.component_class);
+
+      const candidates = classByName.get(comp.component_class);
+      if (candidates && candidates.length > 0) {
+        graph.addRelationship({
+          id: generateId('USES', `${sourceBpId}->${candidates[0].id}:${edgeCounter++}`),
+          sourceId: sourceBpId,
+          targetId: candidates[0].id,
+          type: 'USES',
+          confidence: 0.95,
+          reason: 'blueprint-component',
+        });
+        edgesAdded++;
+      }
+    }
+  }
+
+  // ── Seventh pass: CALLS edges for replicated variable RepNotify functions ──
+  for (const asset of assets) {
+    const vars = asset.variables || [];
+    if (vars.length === 0) continue;
+
+    const sourceBpId = blueprintIdByAssetPath.get(asset.asset_path);
+    if (!sourceBpId) continue;
+
+    for (const v of vars) {
+      if (!v.rep_notify || !v.rep_notify_func) continue;
+      // Rep notify functions are C++ methods like "OnRep_Health"
+      const funcCandidates = symbolByName.get(v.rep_notify_func);
+      if (funcCandidates && funcCandidates.length > 0) {
+        graph.addRelationship({
+          id: generateId('CALLS', `${sourceBpId}->${funcCandidates[0].id}:repnotify:${edgeCounter++}`),
+          sourceId: sourceBpId,
+          targetId: funcCandidates[0].id,
+          type: 'CALLS',
+          confidence: 1.0,
+          reason: 'blueprint-rep-notify',
+        });
+        edgesAdded++;
+      }
+    }
+  }
+
+  // ── Eighth pass: AnimBP State Machines as Process nodes ─────────
+  for (const asset of assets) {
+    const stateMachines = asset.state_machines || [];
+    if (stateMachines.length === 0) continue;
+
+    const ownerBpId = blueprintIdByAssetPath.get(asset.asset_path);
+    if (!ownerBpId) continue;
+    const bpName = extractAssetName(asset.asset_path);
+
+    for (const sm of stateMachines) {
+      if (!sm.states || sm.states.length === 0) continue;
+
+      const processName = `${bpName}::${sm.name}`;
+      const processId = generateId('Process', `sm:${asset.asset_path}:${sm.name}`);
+
+      graph.addNode({
+        id: processId,
+        label: 'Process',
+        properties: {
+          name: processName,
+          filePath: asset.asset_path,
+          startLine: -1,
+          endLine: -1,
+          processType: 'state_machine',
+          stepCount: sm.states.length,
+          description: `AnimBP state machine: ${sm.name} (${sm.states.length} states, ${sm.transitions.length} transitions)`,
+        },
+      });
+      nodesAdded++;
+
+      // CONTAINS: owning AnimBlueprint → state machine Process
+      graph.addRelationship({
+        id: generateId('CONTAINS', `${ownerBpId}->${processId}:${edgeCounter++}`),
+        sourceId: ownerBpId,
+        targetId: processId,
+        type: 'CONTAINS',
+        confidence: 1.0,
+        reason: 'animblueprint-state-machine',
+      });
+      edgesAdded++;
+
+      // STEP_IN_PROCESS: each state is a step
+      for (let i = 0; i < sm.states.length; i++) {
+        graph.addRelationship({
+          id: generateId('STEP_IN_PROCESS', `${ownerBpId}->${processId}:state:${i}:${edgeCounter++}`),
+          sourceId: ownerBpId,
+          targetId: processId,
+          type: 'STEP_IN_PROCESS',
+          confidence: 1.0,
+          reason: 'animblueprint-state',
+          step: i + 1,
+        });
+        edgesAdded++;
+      }
+    }
+  }
+
+  // ── Ninth pass: BehaviorTree CALLS edges + Process nodes ────────
+  for (const asset of assets) {
+    const btNodes = asset.bt_nodes || [];
+    if (btNodes.length === 0) continue;
+
+    const ownerBpId = blueprintIdByAssetPath.get(asset.asset_path);
+    if (!ownerBpId) continue;
+    const btName = extractAssetName(asset.asset_path);
+
+    // Create Process node for the BT
+    const processId = generateId('Process', `bt:${asset.asset_path}`);
+    graph.addNode({
+      id: processId,
+      label: 'Process',
+      properties: {
+        name: `${btName}::Root`,
+        filePath: asset.asset_path,
+        startLine: -1,
+        endLine: -1,
+        processType: 'behavior_tree',
+        stepCount: btNodes.length,
+        description: `BehaviorTree: ${btName} (${btNodes.filter(n => n.type === 'task').length} tasks)`,
+      },
+    });
+    nodesAdded++;
+
+    graph.addRelationship({
+      id: generateId('CONTAINS', `${ownerBpId}->${processId}:${edgeCounter++}`),
+      sourceId: ownerBpId,
+      targetId: processId,
+      type: 'CONTAINS',
+      confidence: 1.0,
+      reason: 'behaviortree-root',
+    });
+    edgesAdded++;
+
+    // CALLS edges for task/decorator/service classes
+    const seenClasses = new Set<string>();
+    for (const node of btNodes) {
+      if (seenClasses.has(node.node_class)) continue;
+      seenClasses.add(node.node_class);
+
+      const candidates = classByName.get(node.node_class);
+      if (candidates && candidates.length > 0) {
+        const reason = node.type === 'task' ? 'behaviortree-task'
+          : node.type === 'decorator' ? 'behaviortree-decorator'
+          : node.type === 'service' ? 'behaviortree-service'
+          : 'behaviortree-node';
+        graph.addRelationship({
+          id: generateId('CALLS', `${ownerBpId}->${candidates[0].id}:${reason}:${edgeCounter++}`),
+          sourceId: ownerBpId,
+          targetId: candidates[0].id,
+          type: 'CALLS',
+          confidence: 0.9,
+          reason,
+        });
+        edgesAdded++;
+      }
+    }
+  }
+
+  // ── Tenth pass: EQS CALLS edges for generators and tests ───────
+  for (const asset of assets) {
+    const eqsOptions = asset.eqs_options || [];
+    if (eqsOptions.length === 0) continue;
+
+    const ownerBpId = blueprintIdByAssetPath.get(asset.asset_path);
+    if (!ownerBpId) continue;
+
+    const seenClasses = new Set<string>();
+    for (const opt of eqsOptions) {
+      // Generator class
+      if (opt.generator_class && !seenClasses.has(opt.generator_class)) {
+        seenClasses.add(opt.generator_class);
+        const candidates = classByName.get(opt.generator_class);
+        if (candidates && candidates.length > 0) {
+          graph.addRelationship({
+            id: generateId('CALLS', `${ownerBpId}->${candidates[0].id}:eqs-gen:${edgeCounter++}`),
+            sourceId: ownerBpId,
+            targetId: candidates[0].id,
+            type: 'CALLS',
+            confidence: 0.9,
+            reason: 'eqs-generator',
+          });
+          edgesAdded++;
+        }
+      }
+      // Test classes
+      for (const test of opt.tests || []) {
+        if (!test.class || seenClasses.has(test.class)) continue;
+        seenClasses.add(test.class);
+        const candidates = classByName.get(test.class);
+        if (candidates && candidates.length > 0) {
+          graph.addRelationship({
+            id: generateId('CALLS', `${ownerBpId}->${candidates[0].id}:eqs-test:${edgeCounter++}`),
+            sourceId: ownerBpId,
+            targetId: candidates[0].id,
+            type: 'CALLS',
+            confidence: 0.9,
+            reason: 'eqs-test',
+          });
+          edgesAdded++;
+        }
+      }
+    }
+  }
+
+  // ── Eleventh pass: Blueprint Execution Flows as Process nodes ─────
   for (const asset of assets) {
     const flows = asset.flows || [];
     if (flows.length === 0) continue;

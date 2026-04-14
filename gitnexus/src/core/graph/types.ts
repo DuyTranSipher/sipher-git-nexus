@@ -74,7 +74,7 @@ export type NodeProperties = {
   description?: string,
   enrichedBy?: 'heuristic' | 'llm',
   // Process-specific properties
-  processType?: 'intra_community' | 'cross_community',
+  processType?: 'intra_community' | 'cross_community' | 'state_machine' | 'behavior_tree',
   stepCount?: number,
   communities?: string[],
   entryPointId?: string,

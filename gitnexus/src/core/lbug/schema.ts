@@ -209,7 +209,7 @@ export const GAMEPLAY_TAG_SCHEMA = CODE_ELEMENT_BASE('GameplayTag');
  *  Each type can connect to: Class, Struct, Method, Function, Blueprint, self, GameplayTag, Community, Process. */
 function generateUERelEntries(): string {
   return UE_ASSET_LABELS.map(label => {
-    const targets = ['Class', 'Struct', 'Method', 'Function', 'Blueprint', label, 'GameplayTag', 'Community', 'Process'];
+    const targets = ['Class', 'Struct', 'Method', 'Function', ...UE_ASSET_LABELS, 'GameplayTag', 'Community', 'Process'];
     // Deduplicate (Blueprint → Blueprint only listed once)
     const unique = [...new Set(targets)];
     return unique.map(target => `  FROM \`${label}\` TO \`${target}\``).join(',\n');

@@ -237,7 +237,7 @@ export const analyzeCommand = async (
       );
       if (uprojectFiles.length > 0) {
         console.log('  Unreal project detected but no Blueprint assets indexed.');
-        console.log('  Run: gitnexus unreal init && gitnexus unreal sync\n');
+        console.log('  Run: gitnexus unreal init && gitnexus unreal blueprint-sync\n');
       }
     }
   } catch { /* non-fatal — Unreal integration is optional */ }

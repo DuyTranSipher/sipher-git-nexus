@@ -1,7 +1,7 @@
 /**
  * `gitnexus unreal` CLI command namespace
  *
- * Subcommands: init, sync, status
+ * Subcommands: init, blueprint-sync, status, setup, update, remove
  * Makes Unreal Engine support discoverable and works on first use.
  */
 
@@ -31,15 +31,65 @@ function getCliVersion(): string {
   return JSON.parse(fsSync.readFileSync(pkgPath, 'utf-8')).version;
 }
 
-function printStalenessWarning(config: UnrealConfig): void {
+/**
+ * Detect CLI/plugin version mismatch and auto-update the plugin (junction +
+ * rebuild) before proceeding.  Always notifies the user when an update runs.
+ * Returns true if the plugin was updated (caller may want to log this).
+ */
+async function autoUpdateIfStale(
+  config: UnrealConfig,
+  projectRoot: string,
+): Promise<boolean> {
   const cliVersion = getCliVersion();
   const installed = config.installed_version;
-  if (!installed) {
-    console.log('  Note: Plugin version unknown — run "gitnexus unreal update" to stamp version.\n');
-  } else if (installed !== cliVersion) {
-    console.log(`  Warning: Plugin was installed by gitnexus v${installed} but you are running v${cliVersion}.`);
-    console.log('  Run "gitnexus unreal update" to update the commandlet plugin.\n');
+
+  // Versions match — nothing to do
+  if (installed && installed === cliVersion) return false;
+
+  const versionLabel = installed
+    ? `v${installed} → v${cliVersion}`
+    : `unknown → v${cliVersion}`;
+
+  console.log('');
+  console.log(`  Plugin update required (${versionLabel})`);
+  console.log('  Updating automatically...');
+  console.log('');
+
+  // Step 1: junction + version stamp (instant)
+  console.log('  [1/2] Updating plugin junction...');
+  const result = await updateUnrealPlugin({ projectRoot });
+  if (result.junctionRecreated) {
+    console.log(`        Junction → ${result.pluginSource}`);
+  } else {
+    console.log('        Junction unchanged (already correct)');
   }
+  console.log(`        Version stamped ${versionLabel}`);
+
+  // Step 2: rebuild editor target (slow — stream output so user sees progress)
+  const uprojectPath = config.project_path;
+  if (uprojectPath && config.editor_cmd) {
+    const projectName = path.basename(uprojectPath, '.uproject');
+    console.log('');
+    console.log(`  [2/2] Rebuilding ${projectName}Editor (this may take several minutes)...`);
+    console.log('');
+    try {
+      await buildUnrealPlugin(config.editor_cmd, projectName, uprojectPath);
+    } catch (err: any) {
+      console.error('');
+      console.error(`  Error: Rebuild failed — ${err.message}`);
+      console.error('  Fix the build error above, then re-run: gitnexus unreal update --force');
+      process.exit(1);
+    }
+  } else {
+    console.log('');
+    console.log('  [2/2] Skipping rebuild — editor_cmd or project_path not set.');
+    console.log('        Run "gitnexus unreal update" manually to rebuild.');
+  }
+
+  console.log('');
+  console.log('  Plugin updated. Continuing...');
+  console.log('');
+  return true;
 }
 
 // ─── init ──────────────────────────────────────────────────────────────
@@ -143,13 +193,13 @@ export async function unrealInitCommand(options?: {
     console.log('\n  Set editor_cmd to enable Blueprint sync:');
     console.log('  gitnexus unreal init --editor-cmd "C:/Path/To/UnrealEditor-Cmd.exe"\n');
   } else {
-    console.log('\n  Ready! Run: gitnexus unreal sync\n');
+    console.log('\n  Ready! Run: gitnexus unreal blueprint-sync\n');
   }
 }
 
-// ─── sync ──────────────────────────────────────────────────────────────
+// ─── blueprint-sync ───────────────────────────────────────────────────
 
-export async function unrealSyncCommand(options?: {
+export async function unrealBlueprintSyncCommand(options?: {
   deep?: boolean;
   repo?: string;
 }): Promise<void> {
@@ -172,7 +222,8 @@ export async function unrealSyncCommand(options?: {
     process.exit(1);
   }
 
-  printStalenessWarning(config);
+  // Auto-update plugin if CLI version changed since last install/update
+  await autoUpdateIfStale(config, cwd);
 
   const { syncUnrealAssetManifest } = await import('../unreal/bridge.js');
   const { withUnrealProgress } = await import('./unreal-progress.js');
@@ -234,7 +285,7 @@ export async function unrealStatusCommand(options?: {
 
   if (!manifest) {
     console.log('No Unreal assets indexed.');
-    console.log('Run: gitnexus unreal sync');
+    console.log('Run: gitnexus unreal blueprint-sync');
     return;
   }
 
@@ -415,7 +466,7 @@ export async function unrealSetupCommand(options?: {
   console.log('');
   console.log('  [3/3] Syncing Blueprint assets...');
   console.log('');
-  await unrealSyncCommand({ deep: true });
+  await unrealBlueprintSyncCommand({ deep: true });
 
   console.log('');
   console.log('  Setup complete!');

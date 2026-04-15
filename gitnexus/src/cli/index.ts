@@ -123,7 +123,14 @@ program
 
 const unrealCmd = program
   .command('unreal')
-  .description('Unreal Engine project management');
+  .description('Unreal Engine Blueprint integration (start with: gitnexus unreal setup)')
+  .addHelpText('after', `
+Workflow:
+  1. gitnexus unreal setup           Install plugin, build, and deep-sync Blueprints
+  2. gitnexus analyze                Index C++ source + Blueprint manifest
+  3. gitnexus unreal blueprint-sync   Re-sync after adding/modifying Blueprints
+  4. gitnexus unreal update          After upgrading gitnexus (rebuilds plugin)
+`);
 
 unrealCmd
   .command('setup')
@@ -141,11 +148,12 @@ unrealCmd
   .action(createLazyAction(() => import('./unreal.js'), 'unrealInitCommand'));
 
 unrealCmd
-  .command('sync')
+  .command('blueprint-sync')
+  .alias('sync')
   .description('Sync Unreal Blueprint assets into the knowledge graph')
   .option('--deep', 'Deep mode: fully load Blueprints for function refs (slower)')
   .option('-r, --repo <name>', 'Target repository')
-  .action(createLazyAction(() => import('./unreal.js'), 'unrealSyncCommand'));
+  .action(createLazyAction(() => import('./unreal.js'), 'unrealBlueprintSyncCommand'));
 
 unrealCmd
   .command('status')
@@ -169,14 +177,14 @@ unrealCmd
   .action(createLazyAction(() => import('./unreal.js'), 'unrealRemoveCommand'));
 
 program
-  .command('unreal-sync')
+  .command('unreal-sync', { hidden: true })
   .description('Refresh the Unreal Blueprint asset manifest for the current indexed repo')
   .option('-r, --repo <name>', 'Target repository')
   .option('--deep', 'Deep mode: load Blueprints fully for native_function_refs (slower, higher memory)')
   .action(createLazyAction(() => import('./tool.js'), 'syncUnrealAssetManifestCommand'));
 
 program
-  .command('unreal-find-refs [functionName]')
+  .command('unreal-find-refs [functionName]', { hidden: true })
   .description('Find confirmed Blueprint references to a native C++ function via the Unreal analyzer')
   .option('-r, --repo <name>', 'Target repository')
   .option('-u, --uid <uid>', 'Direct symbol UID (zero-ambiguity lookup)')
@@ -187,7 +195,7 @@ program
   .action(createLazyAction(() => import('./tool.js'), 'findNativeBlueprintReferencesCommand'));
 
 program
-  .command('unreal-expand-chain <assetPath> <chainAnchorId>')
+  .command('unreal-expand-chain <assetPath> <chainAnchorId>', { hidden: true })
   .description('Expand a Blueprint chain from a confirmed Unreal reference anchor')
   .option('-r, --repo <name>', 'Target repository')
   .option('-d, --direction <dir>', 'upstream or downstream', 'downstream')
@@ -195,7 +203,7 @@ program
   .action(createLazyAction(() => import('./tool.js'), 'expandBlueprintChainCommand'));
 
 program
-  .command('unreal-derived-blueprints <className>')
+  .command('unreal-derived-blueprints <className>', { hidden: true })
   .description('List Blueprint assets derived from a native C++ class via the Unreal manifest')
   .option('-r, --repo <name>', 'Target repository')
   .option('--refresh-manifest', 'Refresh the Unreal asset manifest before searching')

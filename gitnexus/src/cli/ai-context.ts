@@ -38,7 +38,57 @@ const GITNEXUS_END_MARKER = '<!-- gitnexus:end -->';
  * - Exact tool commands with parameters — vague directives get ignored
  * - Self-review checklist — forces model to verify its own work
  */
-function generateGitNexusContent(projectName: string, stats: RepoStats, generatedSkills?: GeneratedSkillInfo[]): string {
+interface UnrealStats {
+  assetCount: number;
+  blueprintCount: number;
+  animBlueprintCount: number;
+  behaviorTreeCount: number;
+  hasVariables: boolean;
+  hasComponents: boolean;
+  hasStateMachines: boolean;
+  hasBTNodes: boolean;
+  hasDeepMode: boolean;
+}
+
+function generateUnrealSection(projectName: string, ue: UnrealStats): string {
+  return `
+## Unreal Engine — Blueprint & C++ Cross-Language Intelligence
+
+This project has **${ue.assetCount} Unreal assets** indexed (${ue.blueprintCount} Blueprints, ${ue.animBlueprintCount} AnimBPs, ${ue.behaviorTreeCount} BehaviorTrees).${ue.hasDeepMode ? ' Deep mode is active — variables, components, state machines, BT nodes, and data pins are available.' : ''}
+
+### Blueprint-Aware Workflows
+
+- **MUST use \`find_blueprints\` to search Blueprints** — NEVER use grep/find for Blueprint references. Blueprints are binary .uasset files invisible to text search.
+  - By component: \`find_blueprints({component_class: "CameraComponent"})\`
+  - By parent: \`find_blueprints({parent_class: "Character"})\`
+  - By type: \`find_blueprints({asset_type: "AnimBlueprint"})\`
+  - By variable: \`find_blueprints({has_replicated_variable: true})\`
+  - Combined: \`find_blueprints({parent_class: "Character", component_class: "SkeletalMeshComponent"})\`
+- **Before changing a C++ class, check Blueprint impact.** Run \`gitnexus_impact\` — it shows BOTH C++ callers AND Blueprint assets that inherit from, use components of, or call functions on the class.
+- **Before changing a C++ function with UFUNCTION specifiers**, run \`find_native_blueprint_references({function: "FunctionName"})\` to find all Blueprint graph nodes that call it.
+- When asked about BehaviorTrees, use \`find_blueprints({asset_type: "BehaviorTree"})\` or \`gitnexus_cypher({query: "MATCH (bt:BehaviorTree)-[r:CALLS]->(c:Class) RETURN bt.name, c.name"})\`.
+
+### Cross-Language Edge Types
+
+The knowledge graph connects C++ and Blueprints through these edge types:
+
+| Edge | Meaning | Example query |
+|------|---------|---------------|
+| \`EXTENDS\` | Blueprint inherits from C++ class | \`MATCH (bp:Blueprint)-[:EXTENDS]->(c:Class) WHERE c.name = "Character" RETURN bp.name\` |
+| \`CALLS\` | Blueprint calls C++ function | \`MATCH (bp)-[:CALLS]->(f) WHERE f.name = "Jump" RETURN bp.name\` |
+| \`USES\` | Blueprint has C++ component | \`MATCH (bp)-[:USES]->(c:Class) WHERE c.name = "CameraComponent" RETURN bp.name\` |
+| \`IMPLEMENTS\` | Blueprint implements C++ interface | Via \`gitnexus_impact\` |
+| \`OVERRIDES\` | Blueprint overrides C++ event | Via \`gitnexus_impact\` |
+
+### Never Do (Unreal-specific)
+
+- NEVER use grep to find Blueprint references to a C++ class — grep cannot read .uasset files.
+- NEVER assume a C++ change only affects C++ code — Blueprints extend, call, and override C++ classes.
+- NEVER ignore Blueprint dependents in impact analysis — they are the majority of the dependency graph in Unreal projects.
+`;
+}
+
+function generateGitNexusContent(projectName: string, stats: RepoStats, generatedSkills?: GeneratedSkillInfo[], unrealStats?: UnrealStats): string {
   const generatedRows = (generatedSkills && generatedSkills.length > 0)
     ? generatedSkills.map(s =>
         `| Work in the ${s.label} area (${s.symbolCount} symbols) | \`.claude/skills/generated/${s.name}/SKILL.md\` |`
@@ -117,6 +167,7 @@ This project is indexed by GitNexus as **${projectName}** (${stats.nodes || 0} s
 | \`gitnexus://repo/${projectName}/processes\` | All execution flows |
 | \`gitnexus://repo/${projectName}/process/{name}\` | Step-by-step execution trace |
 
+${unrealStats ? generateUnrealSection(projectName, unrealStats) : ''}
 ## Self-Check Before Finishing
 
 Before completing any code modification task, verify:
@@ -287,7 +338,31 @@ export async function generateAIContextFiles(
   stats: RepoStats,
   generatedSkills?: GeneratedSkillInfo[]
 ): Promise<{ files: string[] }> {
-  const content = generateGitNexusContent(projectName, stats, generatedSkills);
+  // Detect Unreal project and load manifest stats
+  let unrealStats: UnrealStats | undefined;
+  try {
+    const manifestPath = path.join(_storagePath, 'unreal', 'asset-manifest.json');
+    const raw = await fs.readFile(manifestPath, 'utf-8');
+    const manifest = JSON.parse(raw);
+    if (manifest.assets?.length > 0) {
+      const assets = manifest.assets;
+      unrealStats = {
+        assetCount: assets.length,
+        blueprintCount: assets.filter((a: any) => !a.asset_class || a.asset_class.endsWith('.Blueprint')).length,
+        animBlueprintCount: assets.filter((a: any) => a.asset_class?.endsWith('.AnimBlueprint')).length,
+        behaviorTreeCount: assets.filter((a: any) => a.asset_class?.endsWith('.BehaviorTree')).length,
+        hasVariables: assets.some((a: any) => a.variables?.length > 0),
+        hasComponents: assets.some((a: any) => a.components?.length > 0),
+        hasStateMachines: assets.some((a: any) => a.state_machines?.length > 0),
+        hasBTNodes: assets.some((a: any) => a.bt_nodes?.length > 0),
+        hasDeepMode: manifest.mode === 'deep',
+      };
+    }
+  } catch {
+    // No manifest — not an Unreal project or not synced yet
+  }
+
+  const content = generateGitNexusContent(projectName, stats, generatedSkills, unrealStats);
   const createdFiles: string[] = [];
 
   // Create AGENTS.md (standard for Cursor, Windsurf, OpenCode, Cline, etc.)

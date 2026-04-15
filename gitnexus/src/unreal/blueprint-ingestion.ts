@@ -45,6 +45,19 @@ export const tokenizeBlueprintName = (name: string): string => {
   return [...all, ...all.map(w => w.toLowerCase())].join(' ');
 };
 
+/** Extract the package path from a full Unreal object path.
+ *  "/Game/Characters/BP_Hero.BP_Hero" → "/Game/Characters/BP_Hero"
+ *  "/Game/Characters/BP_Hero" → "/Game/Characters/BP_Hero" (already package path)
+ */
+const extractPackagePath = (assetPath: string): string => {
+  const lastSlash = assetPath.lastIndexOf('/');
+  if (lastSlash < 0) return assetPath;
+  const segment = assetPath.slice(lastSlash + 1);
+  const dotIdx = segment.indexOf('.');
+  if (dotIdx < 0) return assetPath;
+  return assetPath.slice(0, lastSlash + 1) + segment.slice(0, dotIdx);
+};
+
 /** Extract a display name from an Unreal asset path (last segment). */
 const extractAssetName = (assetPath: string): string => {
   // "/Game/Characters/BP_Hero" → "BP_Hero"
@@ -186,10 +199,11 @@ export const ingestBlueprintsIntoGraph = async (
   const blueprintIdByName = new Map<string, string>();
 
   for (const asset of assets) {
-    const bpId = generateId('Blueprint', asset.asset_path);
     const bpName = extractAssetName(asset.asset_path);
-
     const label = assetClassToLabel(asset.asset_class);
+    // ID prefix must match the label so LadybugDB edge COPY finds the node
+    // in the correct table (e.g. AnimBlueprint, not Blueprint).
+    const bpId = generateId(label, asset.asset_path);
     graph.addNode({
       id: bpId,
       label,
@@ -206,6 +220,12 @@ export const ingestBlueprintsIntoGraph = async (
     });
     nodesAdded++;
     blueprintIdByAssetPath.set(asset.asset_path, bpId);
+    // Also index by package path (no dot suffix) so dependency lookups match.
+    // Unreal's GetDependencies returns package names, not full object paths.
+    const pkgPath = extractPackagePath(asset.asset_path);
+    if (pkgPath !== asset.asset_path) {
+      blueprintIdByAssetPath.set(pkgPath, bpId);
+    }
     blueprintIdByName.set(bpName, bpId);
 
     // ── EXTENDS edge to nearest native parent class ──────────────

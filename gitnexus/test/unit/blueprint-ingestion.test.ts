@@ -197,6 +197,85 @@ describe('blueprint-ingestion', () => {
     });
   });
 
+  describe('Blueprint-to-Blueprint IMPORTS edges (dependencies)', () => {
+    it('creates IMPORTS edges when dependencies use package paths (no dot suffix)', async () => {
+      // Real manifests use full object paths for asset_path but package paths for dependencies.
+      // asset_path: "/Game/X/BP_Foo.BP_Foo"  (full object path)
+      // dependency:  "/Game/X/BP_Foo"          (package path — from AssetRegistry::GetDependencies)
+      await writeManifest([
+        {
+          asset_path: '/Game/Anim/ABP_Main.ABP_Main',
+          asset_class: '/Script/Engine.AnimBlueprint',
+          dependencies: [
+            '/Game/Anim/ABP_Sub',         // another Blueprint (package path format)
+            '/Script/Engine',              // C++ module (should be skipped)
+            '/Game/Anim/ABP_Main',         // self-reference (should be skipped)
+          ],
+        },
+        {
+          asset_path: '/Game/Anim/ABP_Sub.ABP_Sub',
+          asset_class: '/Script/Engine.AnimBlueprint',
+          dependencies: [],
+        },
+      ]);
+
+      const result = await ingestBlueprintsIntoGraph(graph, tmpDir);
+      expect(result.nodesAdded).toBe(2);
+
+      const importsEdges = graph.relationships.filter(r => r.type === 'IMPORTS');
+      expect(importsEdges.length).toBe(1);
+
+      const source = graph.getNode(importsEdges[0].sourceId);
+      const target = graph.getNode(importsEdges[0].targetId);
+      expect(source?.properties.name).toBe('ABP_Main');
+      expect(target?.properties.name).toBe('ABP_Sub');
+      expect(importsEdges[0].confidence).toBe(0.7);
+      expect(importsEdges[0].reason).toBe('blueprint-manifest');
+    });
+
+    it('creates IMPORTS edges when dependencies use full object paths', async () => {
+      // Some dependencies may also use full object paths (matching asset_path format)
+      await writeManifest([
+        {
+          asset_path: '/Game/BP_A.BP_A',
+          dependencies: ['/Game/BP_B.BP_B'],
+        },
+        {
+          asset_path: '/Game/BP_B.BP_B',
+          dependencies: [],
+        },
+      ]);
+
+      await ingestBlueprintsIntoGraph(graph, tmpDir);
+
+      const importsEdges = graph.relationships.filter(r => r.type === 'IMPORTS');
+      expect(importsEdges.length).toBe(1);
+
+      const source = graph.getNode(importsEdges[0].sourceId);
+      const target = graph.getNode(importsEdges[0].targetId);
+      expect(source?.properties.name).toBe('BP_A');
+      expect(target?.properties.name).toBe('BP_B');
+    });
+
+    it('skips dependencies that do not resolve to indexed Blueprints', async () => {
+      await writeManifest([
+        {
+          asset_path: '/Game/BP_Hero.BP_Hero',
+          dependencies: [
+            '/Script/PhysicsCore',
+            '/Script/GameplayTags',
+            '/Game/Textures/T_Diffuse',  // not a Blueprint asset in manifest
+          ],
+        },
+      ]);
+
+      await ingestBlueprintsIntoGraph(graph, tmpDir);
+
+      const importsEdges = graph.relationships.filter(r => r.type === 'IMPORTS');
+      expect(importsEdges.length).toBe(0);
+    });
+  });
+
   describe('SCS component USES edges', () => {
     it('creates USES edge from Blueprint to C++ component class', async () => {
       await writeManifest([

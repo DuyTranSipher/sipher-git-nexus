@@ -16,10 +16,12 @@ import type { UnrealConfig } from '../unreal/types.js';
 import {
   findUProjectFile,
   resolveEditorCmd,
+  resolveEngineLayout,
   installUnrealPlugin,
   updateUnrealPlugin,
   removeUnrealPlugin,
   buildUnrealPlugin,
+  type EngineLayout,
 } from '../unreal/plugin-setup.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────
@@ -29,6 +31,51 @@ const __cliDirname = path.dirname(fileURLToPath(import.meta.url));
 function getCliVersion(): string {
   const pkgPath = path.join(__cliDirname, '..', '..', 'package.json');
   return JSON.parse(fsSync.readFileSync(pkgPath, 'utf-8')).version;
+}
+
+/**
+ * Re-resolve the Unreal Engine install at runtime from the .uproject's
+ * EngineAssociation. Honors a stale `editor_cmd` as a hint but falls back to
+ * the registry / launcher chain if the hint no longer exists — so the user
+ * moving or upgrading their engine does not break `gitnexus unreal update`.
+ *
+ * Returns the validated layout. `editorCmdChanged` is true when the resolved
+ * editor path differs from the hint — callers may persist the new value.
+ */
+async function resolveLayoutAtRuntime(
+  uprojectPath: string,
+  editorCmdHint: string | undefined,
+): Promise<{ layout: EngineLayout; editorCmdChanged: boolean }> {
+  let engineAssociation = '';
+  try {
+    const uproject = JSON.parse(await fs.readFile(uprojectPath, 'utf-8'));
+    engineAssociation = uproject.EngineAssociation || '';
+  } catch { /* ignore — resolveEngineLayout will error with guidance */ }
+
+  const layout = resolveEngineLayout(engineAssociation, editorCmdHint);
+  const normalize = (p: string) => path.resolve(p).replace(/\\/g, '/');
+  const editorCmdChanged = !editorCmdHint
+    || normalize(editorCmdHint) !== normalize(layout.editorCmd);
+  return { layout, editorCmdChanged };
+}
+
+/**
+ * Persist a freshly-resolved editor_cmd into .gitnexus/unreal/config.json so
+ * subsequent runs skip registry lookups. Best-effort — any write failure is
+ * silently ignored (the build already succeeded by this point).
+ */
+async function refreshEditorCmdInConfig(projectRoot: string, editorCmd: string): Promise<void> {
+  try {
+    const gitRoot = getGitRoot(projectRoot);
+    if (!gitRoot) return;
+    const { storagePath } = getStoragePaths(gitRoot);
+    const { getUnrealStoragePaths } = await import('../unreal/config.js');
+    const unrealPaths = getUnrealStoragePaths(storagePath);
+    const raw = await fs.readFile(unrealPaths.config_path, 'utf-8');
+    const existing = JSON.parse(raw) as Partial<UnrealConfig>;
+    existing.editor_cmd = editorCmd.replace(/\\/g, '/');
+    await fs.writeFile(unrealPaths.config_path, JSON.stringify(existing, null, 2), 'utf-8');
+  } catch { /* best-effort refresh */ }
 }
 
 /**
@@ -67,13 +114,18 @@ async function autoUpdateIfStale(
 
   // Step 2: rebuild editor target (slow — stream output so user sees progress)
   const uprojectPath = config.project_path;
-  if (uprojectPath && config.editor_cmd) {
+  if (uprojectPath) {
     const projectName = path.basename(uprojectPath, '.uproject');
     console.log('');
     console.log(`  [2/2] Rebuilding ${projectName}Editor (this may take several minutes)...`);
     console.log('');
     try {
-      await buildUnrealPlugin(config.editor_cmd, projectName, uprojectPath);
+      const { layout, editorCmdChanged } = await resolveLayoutAtRuntime(uprojectPath, config.editor_cmd);
+      if (editorCmdChanged) {
+        console.log(`        Engine detected → ${layout.engineRoot}`);
+        await refreshEditorCmdInConfig(projectRoot, layout.editorCmd);
+      }
+      await buildUnrealPlugin(layout.engineRoot, projectName, uprojectPath);
     } catch (err: any) {
       console.error('');
       console.error(`  Error: Rebuild failed — ${err.message}`);
@@ -82,7 +134,7 @@ async function autoUpdateIfStale(
     }
   } else {
     console.log('');
-    console.log('  [2/2] Skipping rebuild — editor_cmd or project_path not set.');
+    console.log('  [2/2] Skipping rebuild — project_path not set.');
     console.log('        Run "gitnexus unreal update" manually to rebuild.');
   }
 
@@ -417,19 +469,22 @@ export async function unrealSetupCommand(options?: {
     process.exit(1);
   }
 
-  // Resolve editor_cmd — fall back to interactive prompt if auto-detection fails
-  let editorCmd: string;
+  // Resolve engine layout — fall back to interactive prompt if auto-detection fails
+  let layout: EngineLayout;
   try {
-    editorCmd = resolveEditorCmd(options?.editorCmd, engineAssociation);
+    layout = resolveEngineLayout(engineAssociation, options?.editorCmd);
   } catch {
-    console.log('  Could not auto-detect UnrealEditor-Cmd.exe.');
-    console.log('  Tip: it lives at <EngineRoot>/Engine/Binaries/Win64/UnrealEditor-Cmd.exe');
+    console.log('  Could not auto-detect Unreal Engine install.');
+    console.log('  Tip: UnrealEditor-Cmd.exe lives at <EngineRoot>/Engine/Binaries/Win64/UnrealEditor-Cmd.exe');
     console.log('');
-    editorCmd = await promptForEditorCmd();
+    const userPath = await promptForEditorCmd();
+    layout = resolveEngineLayout(engineAssociation, userPath);
   }
+  const editorCmd = layout.editorCmd;
 
   console.log('');
   console.log(`  Project:  ${projectName}`);
+  console.log(`  Engine:   ${layout.engineRoot}`);
   console.log(`  Editor:   ${editorCmd}`);
   console.log('');
 
@@ -454,7 +509,7 @@ export async function unrealSetupCommand(options?: {
   console.log(`  [2/3] Building ${projectName}Editor (this may take several minutes)...`);
   console.log('');
   try {
-    await buildUnrealPlugin(editorCmd, projectName, uprojectPath);
+    await buildUnrealPlugin(layout.engineRoot, projectName, uprojectPath);
   } catch (err: any) {
     console.error('');
     console.error(`Error: Build failed — ${err.message}`);
@@ -537,7 +592,12 @@ export async function unrealUpdateCommand(options?: {
   console.log(`  [2/2] Rebuilding ${projectName}Editor...`);
   console.log('');
   try {
-    await buildUnrealPlugin(config.editor_cmd, projectName, uprojectPath);
+    const { layout, editorCmdChanged } = await resolveLayoutAtRuntime(uprojectPath, config.editor_cmd);
+    if (editorCmdChanged) {
+      console.log(`        Engine detected → ${layout.engineRoot}`);
+      await refreshEditorCmdInConfig(projectRoot, layout.editorCmd);
+    }
+    await buildUnrealPlugin(layout.engineRoot, projectName, uprojectPath);
   } catch (err: any) {
     console.error('');
     console.error(`Error: Build failed — ${err.message}`);

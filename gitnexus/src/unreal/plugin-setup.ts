@@ -54,51 +54,121 @@ export async function findUProjectFile(projectRoot: string): Promise<string> {
   return path.join(projectRoot, uprojects[0]);
 }
 
-// ─── Editor command resolution ─────────────────────────────────────
+// ─── Engine layout resolution ──────────────────────────────────────
 
-export function resolveEditorCmd(explicitPath: string | undefined, engineAssociation: string): string {
-  if (explicitPath) {
-    const resolved = path.resolve(explicitPath);
+/**
+ * A validated Unreal Engine installation layout.
+ *
+ * `engineRoot` is the install root (e.g. `C:\Program Files\Epic Games\UE_5.5`
+ * or `C:\SipherUE-5.7.2`). `editorCmd` and `buildBat` are absolute paths that
+ * are guaranteed to exist on disk at probe time.
+ */
+export interface EngineLayout {
+  engineRoot: string;
+  editorCmd: string;
+  buildBat: string;
+}
+
+/**
+ * Given a candidate engine install root, test the known UE directory layouts
+ * and return the first one where BOTH `UnrealEditor-Cmd.exe` and `Build.bat`
+ * exist on disk. Returns null if nothing matches.
+ *
+ * Layouts supported:
+ *   1. Standard UE:        <root>/Engine/Binaries/Win64/UnrealEditor-Cmd.exe
+ *                          <root>/Engine/Build/BatchFiles/Build.bat
+ *   2. Sipher source build: <root>/Engine/Windows/Engine/Binaries/Win64/UnrealEditor-Cmd.exe
+ *                          <root>/Engine/Build/BatchFiles/Build.bat   (Build.bat is NOT nested)
+ */
+function probeEngineLayout(engineRoot: string): EngineLayout | null {
+  const layouts: Array<Omit<EngineLayout, 'engineRoot'>> = [
+    {
+      editorCmd: path.join(engineRoot, 'Engine', 'Binaries', 'Win64', 'UnrealEditor-Cmd.exe'),
+      buildBat: path.join(engineRoot, 'Engine', 'Build', 'BatchFiles', 'Build.bat'),
+    },
+    {
+      editorCmd: path.join(engineRoot, 'Engine', 'Windows', 'Engine', 'Binaries', 'Win64', 'UnrealEditor-Cmd.exe'),
+      buildBat: path.join(engineRoot, 'Engine', 'Build', 'BatchFiles', 'Build.bat'),
+    },
+  ];
+  for (const l of layouts) {
     try {
-      fsSync.accessSync(resolved);
-    } catch {
-      throw new Error(`Editor command not found: ${resolved}`);
+      if (fsSync.statSync(l.editorCmd).isFile() && fsSync.statSync(l.buildBat).isFile()) {
+        return { engineRoot, ...l };
+      }
+    } catch { /* next */ }
+  }
+  return null;
+}
+
+/**
+ * Accept either an engine root OR a path to UnrealEditor-Cmd.exe, walk up to
+ * the root if needed, and return a validated layout. Used to honor user
+ * overrides like a stored `editor_cmd` or `--editor-cmd` argument.
+ */
+function tryEngineRootCandidate(rootOrExe: string): EngineLayout | null {
+  const normalized = rootOrExe.replace(/\//g, '\\');
+  if (normalized.toLowerCase().endsWith('.exe')) {
+    // Walk up to the engine root using known layout tails.
+    const tailPatterns = [
+      /^(.*?)\\Engine\\Windows\\Engine\\Binaries\\Win64\\[^\\]+\.exe$/i,
+      /^(.*?)\\Engine\\Binaries\\Win64\\[^\\]+\.exe$/i,
+    ];
+    for (const p of tailPatterns) {
+      const m = normalized.match(p);
+      if (m) {
+        const layout = probeEngineLayout(m[1]);
+        if (layout) return layout;
+      }
     }
-    return resolved;
+    return null;
+  }
+  return probeEngineLayout(normalized);
+}
+
+/**
+ * Resolve a fully-validated Unreal Engine install at runtime.
+ *
+ * Lookup order:
+ *   1. `explicitHint` — a user-supplied path (either an engine root or
+ *      UnrealEditor-Cmd.exe). A stale or invalid hint silently falls through
+ *      to dynamic detection, so users who moved their engine still get fixed.
+ *   2. Registry `HKCU\Software\Epic Games\Unreal Engine\Builds\<GUID>`
+ *      (source builds — kept live by Setup.bat and the "Switch Engine Version" dialog).
+ *   3. `%LOCALAPPDATA%/EpicGames/UnrealEngineLauncher/LauncherInstalled.dat`
+ *      (Epic Games Launcher installs).
+ *   4. Standard launcher path `C:\Program Files\Epic Games\UE_<version>`.
+ *
+ * Throws with actionable guidance if all sources fail.
+ */
+export function resolveEngineLayout(
+  engineAssociation: string,
+  explicitHint?: string,
+): EngineLayout {
+  if (explicitHint) {
+    const resolved = path.resolve(explicitHint);
+    const layout = tryEngineRootCandidate(resolved);
+    if (layout) return layout;
+    // Stale hint — fall through to dynamic resolution.
   }
 
   if (process.platform !== 'win32') {
-    throw new Error('Auto-detection of UnrealEditor-Cmd is only supported on Windows. Use --editor-cmd.');
+    throw new Error('Auto-detection of Unreal Engine is only supported on Windows. Pass --editor-cmd <path-to-UnrealEditor-Cmd.exe>.');
   }
 
-  const tryCandidates = (rootOrExe: string): string | null => {
-    const candidates = [
-      rootOrExe,
-      path.join(rootOrExe, 'Engine', 'Binaries', 'Win64', 'UnrealEditor-Cmd.exe'),
-      path.join(rootOrExe, 'Engine', 'Windows', 'Engine', 'Binaries', 'Win64', 'UnrealEditor-Cmd.exe'),
-    ];
-    for (const c of candidates) {
-      try {
-        const stat = fsSync.statSync(c);
-        if (stat.isFile()) return c;
-      } catch { /* next */ }
-    }
-    return null;
-  };
-
   if (engineAssociation) {
-    // Try registry lookup for source builds (GUID engine association)
+    // Registry lookup (GUID engine association for source builds)
     try {
       const regQuery = `reg query "HKCU\\Software\\Epic Games\\Unreal Engine\\Builds" /v "${engineAssociation}" 2>nul`;
       const output = execSync(regQuery, { encoding: 'utf-8' });
       const match = output.match(/REG_SZ\s+(.+)/);
       if (match) {
-        const found = tryCandidates(match[1].trim());
-        if (found) return found;
+        const layout = tryEngineRootCandidate(match[1].trim());
+        if (layout) return layout;
       }
     } catch { /* registry key not found */ }
 
-    // Try LauncherInstalled.dat (Epic Games Launcher writes this for all engine installs)
+    // Epic Games Launcher installs
     try {
       const launcherDat = path.join(
         process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
@@ -108,21 +178,30 @@ export function resolveEditorCmd(explicitPath: string | undefined, engineAssocia
       if (Array.isArray(launcher.InstallationList)) {
         for (const entry of launcher.InstallationList) {
           if (entry.AppName === `UE_${engineAssociation}` || entry.AppName === engineAssociation) {
-            const found = tryCandidates(entry.InstallLocation);
-            if (found) return found;
+            const layout = tryEngineRootCandidate(entry.InstallLocation);
+            if (layout) return layout;
           }
         }
       }
-    } catch { /* LauncherInstalled.dat not found or unparseable */ }
+    } catch { /* LauncherInstalled.dat missing or unreadable */ }
 
-    // Try standard install path
-    const found = tryCandidates(path.join('C:\\Program Files\\Epic Games', `UE_${engineAssociation}`));
-    if (found) return found;
+    // Standard launcher path
+    const layout = tryEngineRootCandidate(path.join('C:\\Program Files\\Epic Games', `UE_${engineAssociation}`));
+    if (layout) return layout;
   }
 
   throw new Error(
-    `Could not auto-detect UnrealEditor-Cmd.exe for EngineAssociation '${engineAssociation}'. Use --editor-cmd to specify it.`
+    `Could not locate Unreal Engine for EngineAssociation '${engineAssociation}'. ` +
+    `Pass --editor-cmd <path-to-UnrealEditor-Cmd.exe>, or re-run Setup.bat in your engine source tree to refresh the registry.`
   );
+}
+
+/**
+ * Thin wrapper around `resolveEngineLayout` that returns only the editor
+ * binary. Preserves the existing call signature used by `unreal setup`.
+ */
+export function resolveEditorCmd(explicitPath: string | undefined, engineAssociation: string): string {
+  return resolveEngineLayout(engineAssociation, explicitPath).editorCmd;
 }
 
 // ─── Plugin installation ───────────────────────────────────────────
@@ -338,36 +417,29 @@ export async function removeUnrealPlugin(options: {
 /**
  * Invoke UnrealBuildTool via Build.bat to compile the editor target.
  * Streams build output directly to the terminal (stdio: 'inherit').
+ *
+ * Callers must pass an engine root that has already been validated (typically
+ * via `resolveEngineLayout`). This function re-probes the layout to resolve
+ * Build.bat so the two supported installs (standard + Sipher-nested) Just Work.
  */
 export async function buildUnrealPlugin(
-  editorCmd: string,
+  engineRoot: string,
   projectName: string,
   uprojectPath: string
 ): Promise<void> {
-  // Derive engine root from editor_cmd path
-  // e.g. "C:/Program Files/Epic Games/UE_5.5/Engine/Binaries/Win64/UnrealEditor-Cmd.exe"
-  //   →  "C:\Program Files\Epic Games\UE_5.5"
-  const normalized = editorCmd.replace(/\//g, '\\');
-  const engineBinIdx = normalized.search(/\\Engine\\Binaries\\/i);
-  if (engineBinIdx === -1) {
+  const layout = probeEngineLayout(engineRoot);
+  if (!layout) {
     throw new Error(
-      `Cannot derive engine root from editor_cmd: "${editorCmd}". Expected path containing \\Engine\\Binaries\\.`
+      `No valid Unreal Engine layout found under "${engineRoot}". `
+      + `Expected UnrealEditor-Cmd.exe and Build.bat inside Engine/.`
     );
-  }
-  const engineRoot = normalized.slice(0, engineBinIdx);
-  const buildBat = path.join(engineRoot, 'Engine', 'Build', 'BatchFiles', 'Build.bat');
-
-  try {
-    fsSync.accessSync(buildBat);
-  } catch {
-    throw new Error(`Build.bat not found at: ${buildBat}`);
   }
 
   const target = `${projectName}Editor`;
   const args = [target, 'Win64', 'Development', uprojectPath, '-WaitMutex'];
 
   await new Promise<void>((resolve, reject) => {
-    const proc = spawn('cmd', ['/c', buildBat, ...args], { stdio: 'inherit' });
+    const proc = spawn('cmd', ['/c', layout.buildBat, ...args], { stdio: 'inherit' });
     proc.on('close', (code) => {
       if (code === 0) {
         resolve();

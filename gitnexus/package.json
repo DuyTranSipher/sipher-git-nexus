@@ -34,7 +34,9 @@
     "hooks",
     "scripts",
     "skills",
-    "vendor",
+    "vendor/leiden",
+    "vendor/GitNexusUnreal/Source",
+    "vendor/GitNexusUnreal/GitNexusUnreal.uplugin",
     "CHANGELOG.md"
   ],
   "scripts": {
